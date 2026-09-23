@@ -1,7 +1,7 @@
 /* FlipDex — service worker
    Incrémenter APP_VERSION à chaque modification visible de l'app :
    c'est ce qui déclenche la mise à jour chez les utilisateurs. */
-const APP_VERSION = "v1.02";
+const APP_VERSION = "v1.03";
 const SHELL_CACHE = `flipdex-shell-${APP_VERSION}`;
 const RUNTIME_CACHE = "flipdex-runtime";
 const RUNTIME_MAX = 400;
