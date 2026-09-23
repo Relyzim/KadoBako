@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "FlipDex — Suivi achat-revente",
+  "short_name": "FlipDex",
+  "description": "Suivi d'achat-revente de cartes et produits scellés Pokémon : stock, marges, ROI.",
+  "lang": "fr",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFF4F8",
+  "theme_color": "#FFF4F8",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

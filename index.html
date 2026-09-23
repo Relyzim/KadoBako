@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#FFF4F8">
+<title>FlipDex — Suivi achat-revente</title>
+<meta name="description" content="Suivi d'achat-revente de cartes et produits scellés Pokémon : stock, marges, ROI.">
+<link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png">
+<link rel="apple-touch-icon" sizes="120x120" href="icons/apple-touch-icon-120.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="FlipDex">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Chivo+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="bar">
+    <div class="brand"><span class="holo-dot" aria-hidden="true"></span><span class="wordmark">FlipDex</span></div>
+    <div class="bar-tools">
+      <button class="tool" id="btnTheme" type="button" aria-label="Changer de thème">🌙</button>
+      <button class="tool" id="btnRefresh" type="button" aria-label="Actualiser les prix du marché">↻ <span class="lbl">Marché</span></button>
+      <button class="tool" id="btnAnalytics" type="button" aria-label="Analyses">📊 <span class="lbl">Analyses</span></button>
+      <button class="tool" id="btnWish" type="button" aria-label="Liste d'achats">☆ <span class="lbl">À acheter</span> <span class="n" id="wishCount">0</span></button>
+      <button class="tool" id="btnSettings" type="button" aria-label="Réglages">⚙ <span class="lbl">Réglages</span></button>
+      <button class="tool" id="btnInstall" type="button" hidden>Installer l'app</button>
+      <details class="menu" id="dataMenu">
+        <summary class="tool">Données ▾</summary>
+        <div class="menu-pop" role="menu">
+          <button type="button" role="menuitem" id="btnExport">Export JSON (sauvegarde)</button>
+          <button type="button" role="menuitem" id="btnCSV">Export CSV (Excel)</button>
+          <button type="button" role="menuitem" id="btnImport">Importer une sauvegarde</button>
+          <button type="button" role="menuitem" id="btnIosInstall" hidden>Installer sur l'écran d'accueil</button>
+          <button type="button" role="menuitem" id="btnTrash">Corbeille <span class="n" id="trashCount"></span></button>
+          <button type="button" role="menuitem" id="btnClear" class="danger">Vider les données</button>
+        </div>
+      </details>
+      <input type="file" id="fileImport" accept="application/json" hidden>
+    </div>
+  </header>
+
+  <section class="kpis" aria-label="Tableau de bord">
+    <div class="kpi"><span class="eyebrow lab">Total investi</span><span class="val num" id="kInvest">—</span><span class="sub">stock + vendues</span></div>
+    <div class="kpi"><span class="eyebrow lab">Valeur du stock</span><span class="val num" id="kStock">—</span><span class="sub">au prix indiqué</span></div>
+    <div class="kpi"><span class="eyebrow lab">CA réel</span><span class="val num" id="kCA">—</span><span class="sub">ventes encaissées</span></div>
+    <div class="kpi hero"><span class="eyebrow lab">Bénéfice réel</span><span class="val num" id="kProfit">—</span><span class="sub">net de frais</span></div>
+    <div class="kpi"><span class="eyebrow lab">ROI global</span><span class="val num" id="kROI">—</span><span class="sub">cartes vendues</span></div>
+  </section>
+  <section class="goal" id="goalBar" aria-label="Bénéfice du mois"></section>
+
+  <div class="grid">
+    <!-- Fast entry -->
+    <section class="panel" aria-label="Saisie rapide">
+      <h2>Saisie rapide</h2>
+      <p class="hint" id="entryHint">Choisis un set, puis la carte — prix marché et conseil s'affichent automatiquement.</p>
+
+      <div class="session" id="sessionBox">
+        <label class="switch"><input type="checkbox" id="sessionToggle"><span class="track" aria-hidden="true"></span><span>Session d'achat</span></label>
+        <div id="sessionPanel" hidden>
+          <p class="session-stats" id="sessionStats"></p>
+          <div class="field"><label for="sessionTag">Étiquette ajoutée à chaque article</label><input id="sessionTag" type="text"></div>
+          <button type="button" class="mini" id="sessionEnd">Terminer la session</button>
+        </div>
+      </div>
+
+      <div class="cur" role="group" aria-label="Type d'item" style="width:100%;margin-bottom:14px">
+        <button id="modeCard" aria-pressed="true" style="flex:1">Carte</button>
+        <button id="modeSealed" aria-pressed="false" style="flex:1">Scellé</button>
+      </div>
+
+      <button class="scan" id="btnScan" type="button">◎ Scanner la carte</button>
+      <div class="preview" id="preview"><span class="ph">La carte sélectionnée<br>s'affichera ici</span></div>
+      <div class="mkt" id="mktBox" hidden></div>
+
+      <div class="field"><label for="selSerie">Série</label><select id="selSerie"><option value="">Chargement…</option></select></div>
+      <div class="field"><label for="selSet">Set / Extension</label><select id="selSet" disabled><option value="">—</option></select></div>
+      <div class="field" id="cardPickWrap"><label for="selCard">Carte (n°)</label><select id="selCard" disabled><option value="">—</option></select></div>
+      <div class="field" id="variantWrap"><label for="selVariant">Variante</label><select id="selVariant" disabled><option value="">Non précisée</option><option value="normal">Normale</option><option value="holo">Holo</option><option value="reverse">Reverse</option><option value="firstEdition">1re édition</option><option value="wPromo">Promo</option></select></div>
+      <div class="field" id="prodPickWrap" hidden><label for="selProduct">Type de produit</label><select id="selProduct" disabled><option value="">— choisir le set d'abord —</option></select></div>
+      <div class="field" id="prodNameWrap" hidden><label for="inProdName">Précision (optionnel)</label><input id="inProdName" type="text" placeholder="ex. édition Pokémon Center, coloris…"></div>
+
+      <div class="photo-drop" id="inPhotoWrap">
+        <img id="inPhotoPv" class="pv" alt="" style="display:none">
+        <div style="flex:1"><label for="inPhoto" style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px">Photo réelle (remplace le visuel)</label>
+          <input id="inPhoto" type="file" accept="image/*" capture="environment"></div>
+        <button class="mini del" id="inPhotoClear" type="button">Retirer</button>
+      </div>
+
+      <div class="row3">
+        <div class="field"><label for="inPurchase">Prix d'achat</label><input class="money" id="inPurchase" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+        <div class="field"><label for="inQty">Quantité</label><input class="money" id="inQty" type="number" min="1" step="1" value="1"></div>
+        <div class="field"><label for="selCond">État</label><select id="selCond">
+          <option value="MT">MT</option><option value="NM" selected>NM</option><option value="EX">EX</option>
+          <option value="GD">GD</option><option value="LP">LP</option><option value="PL">PL</option><option value="PO">PO</option>
+        </select></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label for="inDate">Date d'achat</label><input id="inDate" type="date"></div>
+        <div class="field"><label for="inLoc">Emplacement</label><input id="inLoc" type="text" placeholder="ex. Classeur A p.3"></div>
+      </div>
+      <div class="suggest" id="dealBox" hidden><span>Achat vs marché :</span><span class="tag" id="dealTag"></span></div>
+      <div class="field"><label for="inAsking">Prix de revente indiqué</label><input class="money" id="inAsking" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+      <p class="warn" id="askWarn" hidden></p>
+      <div class="suggest" id="suggestBox" hidden><span>Conseillé : <b id="suggestVal">—</b></span><button id="applySuggest" type="button">Appliquer</button></div>
+
+      <button class="btn-primary" id="btnAdd" type="button" disabled>Ajouter au stock</button>
+      <button class="btn-secondary" id="btnWishAdd" type="button" hidden>☆ Ajouter à la liste d'achats</button>
+      <p class="status-note" id="storeNote"></p>
+    </section>
+
+    <!-- Stock list -->
+    <section aria-label="Inventaire">
+      <div class="list-head">
+        <div class="filters" role="group" aria-label="Filtrer">
+          <button class="chip" data-f="all" aria-pressed="true">Tout <span class="n" id="cAll">0</span></button>
+          <button class="chip" data-f="stock" aria-pressed="false">Stock <span class="n" id="cStock">0</span></button>
+          <button class="chip" data-f="listed" aria-pressed="false">En vente <span class="n" id="cListed">0</span></button>
+          <button class="chip" data-f="sold" aria-pressed="false">Vendu <span class="n" id="cSold">0</span></button>
+        </div>
+        <div class="searchbar">
+          <input id="search" type="search" placeholder="Rechercher…" aria-label="Rechercher">
+          <select id="tagFilter" aria-label="Filtrer par étiquette"><option value="">Toutes étiquettes</option></select>
+          <select id="sortBy" aria-label="Trier">
+            <option value="recent">Récent</option>
+            <option value="margin">Marge ↓</option>
+            <option value="asking">Prix indiqué ↓</option>
+            <option value="age">Délai en stock ↓</option>
+            <option value="set">Set A→Z</option>
+            <option value="name">Nom A→Z</option>
+          </select>
+          <div class="cur viewtoggle" role="group" aria-label="Affichage">
+            <button id="viewList" type="button" aria-pressed="true" title="Liste" aria-label="Affichage en liste">☰</button>
+            <button id="viewGallery" type="button" aria-pressed="false" title="Galerie" aria-label="Affichage en galerie">▦</button>
+          </div>
+        </div>
+      </div>
+      <div class="cards" id="stockList"></div>
+      <div class="hist" id="histWrap" hidden>
+        <div class="list-head"><span class="eyebrow">Historique des bénéfices</span></div>
+        <div class="cards" id="histList"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- Modal: list -->
+<div class="scrim" id="modalList"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mlTitle">
+  <h3 id="mlTitle">Mettre en vente</h3><p class="mh" id="mlSub"></p>
+  <div class="field"><label for="mlPlatform">Lieu de vente</label><select id="mlPlatform">
+    <option value="Vinted">Vinted</option><option value="eBay">eBay</option><option value="Cardmarket">Cardmarket</option><option value="__custom">Autre (à préciser)</option>
+  </select></div>
+  <div class="field" id="mlCustomWrap" hidden><label for="mlCustom">Préciser le lieu</label><input id="mlCustom" type="text" placeholder="ex. Leboncoin, boutique…"></div>
+  <div class="row2">
+    <div class="field"><label for="mlNet">Tu veux toucher (net)</label><input class="money" id="mlNet" type="number" min="0" step="0.01" inputmode="decimal" placeholder="optionnel"></div>
+    <div class="field"><label for="mlPrice">Prix à afficher</label><input class="money" id="mlPrice" type="number" min="0" step="0.01" inputmode="decimal"></div>
+  </div>
+  <div class="calc" id="mlCalc"></div>
+  <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm" id="mlConfirm" type="button">Mettre en vente</button></div>
+</div></div>
+
+<!-- Modal: sold -->
+<div class="scrim" id="modalSold"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="msTitle">
+  <h3 id="msTitle">Marquer vendu</h3><p class="mh" id="msSub"></p>
+  <div class="row3">
+    <div class="field"><label for="msPrice">Prix réel (unité)</label><input class="money" id="msPrice" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+    <div class="field"><label for="msQty">Quantité vendue</label><input class="money" id="msQty" type="number" min="1" step="1" value="1"></div>
+    <div class="field"><label for="msPlatform">Lieu de vente</label><select id="msPlatform">
+      <option value="Vinted">Vinted</option><option value="eBay">eBay</option><option value="Cardmarket">Cardmarket</option><option value="__custom">Autre (à préciser)</option>
+    </select></div>
+  </div>
+  <div class="field" id="msCustomWrap" hidden><label for="msCustom">Préciser le lieu</label><input id="msCustom" type="text" placeholder="ex. Leboncoin, boutique…"></div>
+  <p class="mh" id="msQtyNote" style="margin:-6px 0 12px" hidden></p>
+  <div class="row2">
+    <div class="field"><label for="msFee">Frais plateforme (total)</label><input class="money" id="msFee" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+    <div class="field"><label for="msShip">Frais d'envoi (total)</label><input class="money" id="msShip" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+  </div>
+  <div class="calc" id="msCalc"></div>
+  <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm" id="msConfirm" type="button">Archiver la vente</button></div>
+</div></div>
+
+<!-- Modal: edit -->
+<div class="scrim" id="modalEdit"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="meTitle">
+  <h3 id="meTitle">Modifier la carte</h3><p class="mh" id="meSub"></p>
+  <div class="photo-drop">
+    <img id="mePhotoPv" class="pv" alt="">
+    <div style="flex:1"><label for="mePhoto" style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px">Photo réelle (état réel)</label>
+      <input id="mePhoto" type="file" accept="image/*"></div>
+    <button class="mini del" id="mePhotoClear" type="button">Retirer</button>
+  </div>
+  <div class="row3">
+    <div class="field"><label for="mePurchase">Prix d'achat</label><input class="money" id="mePurchase" type="number" min="0" step="0.01" inputmode="decimal"></div>
+    <div class="field"><label for="meQty">Quantité</label><input class="money" id="meQty" type="number" min="1" step="1"></div>
+    <div class="field"><label for="meCond">État</label><select id="meCond">
+      <option value="MT">MT</option><option value="NM">NM</option><option value="EX">EX</option><option value="GD">GD</option><option value="LP">LP</option><option value="PL">PL</option><option value="PO">PO</option>
+    </select></div>
+  </div>
+  <div class="row2">
+    <div class="field"><label for="meDate">Date d'achat</label><input id="meDate" type="date"></div>
+    <div class="field"><label for="meLoc">Emplacement</label><input id="meLoc" type="text" placeholder="ex. Classeur A p.3"></div>
+  </div>
+  <div class="field"><label for="meAsking">Prix de revente indiqué</label><input class="money" id="meAsking" type="number" min="0" step="0.01" inputmode="decimal"></div>
+  <div class="row3" id="meGradeRow">
+    <div class="field"><label for="meGradeCo">Grading</label><select id="meGradeCo">
+      <option value="">—</option><option value="PSA">PSA</option><option value="CGC">CGC</option><option value="BGS">BGS</option><option value="SGC">SGC</option>
+    </select></div>
+    <div class="field"><label for="meGrade">Note</label><input class="money" id="meGrade" type="number" min="0" max="10" step="0.5" placeholder="ex. 9"></div>
+    <div class="field"><label for="meGradeVal">Valeur gradée</label><input class="money" id="meGradeVal" type="number" min="0" step="0.01" placeholder="0.00"></div>
+  </div>
+
+  <div class="field" id="meVariantWrap"><label for="meVariant">Variante</label><select id="meVariant"><option value="">Non précisée</option><option value="normal">Normale</option><option value="holo">Holo</option><option value="reverse">Reverse</option><option value="firstEdition">1re édition</option><option value="wPromo">Promo</option></select></div>
+  <div class="field"><label for="meTags">Étiquettes (séparées par des virgules)</label><input id="meTags" type="text" placeholder="ex. à grader, réservé"><div class="tagpicks" id="meTagPicks"></div></div>
+  <div class="field"><label for="meNotes">Notes</label><textarea id="meNotes" rows="3" placeholder="Défaut au dos, acheteur intéressé…"></textarea></div>
+
+  <div id="meListedFields" hidden>
+    <div class="field"><label for="meListPlatform">Lieu de vente</label><select id="meListPlatform">
+      <option value="Vinted">Vinted</option><option value="eBay">eBay</option><option value="Cardmarket">Cardmarket</option><option value="__custom">Autre (à préciser)</option>
+    </select></div>
+    <div class="field" id="meListCustomWrap" hidden><label for="meListCustom">Préciser le lieu</label><input id="meListCustom" type="text"></div>
+  </div>
+  <div id="meSoldFields" hidden>
+    <div class="row2">
+      <div class="field"><label for="meSoldPrice">Prix réel (unité)</label><input class="money" id="meSoldPrice" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div class="field"><label for="meSoldPlatform">Lieu de vente</label><select id="meSoldPlatform">
+        <option value="Vinted">Vinted</option><option value="eBay">eBay</option><option value="Cardmarket">Cardmarket</option><option value="__custom">Autre (à préciser)</option>
+      </select></div>
+    </div>
+    <div class="field" id="meSoldCustomWrap" hidden><label for="meSoldCustom">Préciser le lieu</label><input id="meSoldCustom" type="text"></div>
+    <div class="row2">
+      <div class="field"><label for="meFee">Frais plateforme (total)</label><input class="money" id="meFee" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div class="field"><label for="meShip">Frais d'envoi (total)</label><input class="money" id="meShip" type="number" min="0" step="0.01" inputmode="decimal"></div>
+    </div>
+  </div>
+  <div class="field"><label for="meStatus">Statut</label><select id="meStatus">
+    <option value="stock">Stock</option><option value="listed">En vente</option><option value="sold">Vendu</option>
+  </select></div>
+  <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm" id="meConfirm" type="button">Enregistrer</button></div>
+</div></div>
+
+<!-- Modal: scan -->
+<div class="scrim" id="modalScan"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="scTitle">
+  <h3 id="scTitle">Scanner (v1.1)</h3>
+  <p class="mh">Reconnaissance par empreinte visuelle (hash perceptuel) parmi les cartes du set sélectionné, et lecture de code-barres si présent. Sélectionne d'abord une série + un set.</p>
+  <video id="camView" playsinline muted></video>
+  <p class="mh" id="scNote"></p>
+  <div class="modal-acts">
+    <button class="cancel" data-close type="button">Fermer</button>
+    <button class="confirm" id="scCapture" type="button">Reconnaître</button>
+  </div>
+</div></div>
+
+<!-- Modal: listing generator -->
+<div class="scrim" id="modalListing"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="lgTitle">
+  <h3 id="lgTitle">Annonce prête à copier</h3><p class="mh" id="lgSub"></p>
+  <div class="field"><label for="lgTitleField">Titre</label><input id="lgTitleField" type="text"></div>
+  <div class="field"><label for="lgBody">Description</label><textarea id="lgBody" rows="7" style="width:100%;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:var(--r-sm);padding:10px 11px;font-family:var(--f-body);font-size:14px;resize:vertical"></textarea></div>
+  <div class="field"><label for="lgTags">Hashtags</label><input id="lgTags" type="text"></div>
+  <div class="modal-acts">
+    <button class="cancel" data-close type="button">Fermer</button>
+    <button class="confirm" id="lgCopy" type="button">Tout copier</button>
+  </div>
+</div></div>
+
+<!-- Modal: analytics -->
+<div class="scrim" id="modalAnalytics"><div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="anTitle">
+  <h3 id="anTitle">Analyses</h3><p class="mh" id="anSub"></p>
+  <div class="mkt" id="anVelocity" style="margin-bottom:6px"></div>
+  <div class="sec-title">Trésorerie</div>
+  <div class="treso" id="anTreso"></div>
+  <div class="chartwrap" id="chartCash" style="margin-top:10px"></div>
+  <div class="analytics-grid">
+    <div><div class="sec-title">Bénéfice cumulé</div><div class="chartwrap" id="chartProfit"></div></div>
+    <div><div class="sec-title">Valeur du stock dans le temps</div><div class="chartwrap" id="chartStock"></div></div>
+  </div>
+  <div class="sec-title">Marge moyenne par lieu de vente</div><div class="bars" id="byPlatform"></div>
+  <div class="sec-title">Marge moyenne par set</div><div class="bars" id="bySet"></div>
+  <div class="sec-title">Marge moyenne par état</div><div class="bars" id="byCond"></div>
+  <div class="analytics-grid" style="margin-top:6px">
+    <div><div class="sec-title">Top marges</div><div class="bars" id="topWin"></div></div>
+    <div><div class="sec-title">Flops</div><div class="bars" id="topFlop"></div></div>
+  </div>
+  <div class="modal-acts"><button class="confirm" data-close type="button">Fermer</button></div>
+</div></div>
+
+<!-- Modal: settings -->
+<div class="scrim" id="modalSettings"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="stTitle">
+  <h3 id="stTitle">Réglages</h3><p class="mh">Objectif, conseil de prix, frais par défaut et conversion des prix TCGplayer.</p>
+  <div class="sec-title" style="margin-top:0">Objectif</div>
+  <div class="field"><label for="stGoal">Objectif de bénéfice mensuel (€, 0 = aucun)</label><input class="money" id="stGoal" type="number" min="0" step="10"></div>
+  <div class="sec-title">Prix conseillé</div>
+  <div class="row2">
+    <div class="field"><label for="stCoef">Coefficient cible (× achat)</label><input class="money" id="stCoef" type="number" min="1" step="0.05"></div>
+    <div class="field"><label for="stUndercut">Sous-cotation marché (%)</label><input class="money" id="stUndercut" type="number" min="0" step="1"></div>
+  </div>
+  <div class="sec-title">Frais par défaut (%, forfait envoi)</div>
+  <div class="row3">
+    <div class="field"><label>Vinted %</label><input class="money" id="stVpct" type="number" min="0" step="0.5"></div>
+    <div class="field"><label>eBay %</label><input class="money" id="stEpct" type="number" min="0" step="0.5"></div>
+    <div class="field"><label>Cardmarket %</label><input class="money" id="stCpct" type="number" min="0" step="0.5"></div>
+  </div>
+  <div class="row3">
+    <div class="field"><label>Vinted envoi</label><input class="money" id="stVflat" type="number" min="0" step="0.1"></div>
+    <div class="field"><label>eBay envoi</label><input class="money" id="stEflat" type="number" min="0" step="0.1"></div>
+    <div class="field"><label>Cardmarket envoi</label><input class="money" id="stCflat" type="number" min="0" step="0.1"></div>
+  </div>
+  <div class="sec-title">Prix TCGplayer</div>
+  <div class="field"><label for="stFx">Conversion : 1 dollar = ? € (TCGplayer publie ses prix en dollars)</label><input class="money" id="stFx" type="number" min="0" step="0.01"></div>
+  <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm" id="stConfirm" type="button">Enregistrer</button></div>
+</div></div>
+
+<!-- Modal: doublon -->
+<div class="scrim" id="modalDup"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="dpTitle">
+  <h3 id="dpTitle">Déjà en stock</h3><p class="mh" id="dpSub"></p>
+  <div class="calc" id="dpCalc"></div>
+  <div class="modal-acts"><button class="cancel" id="dpSeparate" type="button">Ligne séparée</button><button class="confirm" id="dpMerge" type="button">Ajouter au lot</button></div>
+</div></div>
+
+<!-- Modal: corbeille -->
+<div class="scrim" id="modalTrash"><div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="trTitle">
+  <h3 id="trTitle">Corbeille</h3><p class="mh">Les éléments supprimés sont gardés 30 jours, puis effacés automatiquement.</p>
+  <div class="cards" id="trashList"></div>
+  <div class="modal-acts"><button class="cancel" id="trashEmpty" type="button">Vider la corbeille</button><button class="confirm" data-close type="button">Fermer</button></div>
+</div></div>
+
+<!-- Modal: liste d'achats -->
+<div class="scrim" id="modalWish"><div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="wlTitle">
+  <h3 id="wlTitle">Liste d'achats</h3><p class="mh" id="wlSub"></p>
+  <div class="cards" id="wishList"></div>
+  <div class="modal-acts"><button class="cancel" id="wishRefresh" type="button">↻ Actualiser les prix</button><button class="confirm" data-close type="button">Fermer</button></div>
+</div></div>
+
+<!-- Modal: ajout à la liste d'achats -->
+<div class="scrim" id="modalWishAdd"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="waTitle">
+  <h3 id="waTitle">Ajouter à la liste d'achats</h3><p class="mh" id="waSub"></p>
+  <div class="field"><label for="waTarget">Prix cible (tu achètes à ce prix ou moins)</label><input class="money" id="waTarget" type="number" min="0" step="0.01" inputmode="decimal"></div>
+  <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm" id="waConfirm" type="button">Ajouter à la liste</button></div>
+</div></div>
+
+<!-- Modal: installation iPhone / iPad -->
+<div class="scrim" id="modalIos"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="ioTitle">
+  <h3 id="ioTitle">Installer FlipDex sur l'iPhone</h3>
+  <p class="mh">L'app s'installe depuis le navigateur, sans passer par l'App Store.</p>
+  <ol class="steps">
+    <li>Appuie sur le bouton <b>Partager</b> <span aria-hidden="true">(le carré avec une flèche vers le haut)</span>.</li>
+    <li>Fais défiler et choisis <b>« Sur l'écran d'accueil »</b>.</li>
+    <li>Appuie sur <b>Ajouter</b>. L'icône FlipDex apparaît sur ton écran d'accueil.</li>
+  </ol>
+  <p class="mh" style="margin-top:14px">Icône absente ou ancienne ? Supprime l'icône de l'écran d'accueil puis ajoute-la à nouveau : l'iPhone ne met jamais à jour une icône déjà installée.</p>
+  <div class="modal-acts"><button class="confirm" data-close type="button">Compris</button></div>
+</div></div>
+
+<div class="updatebar" id="updateBar" role="status" hidden>
+  <span>Une nouvelle version de FlipDex est prête.</span>
+  <button id="btnUpdate" type="button">Mettre à jour</button>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

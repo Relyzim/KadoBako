@@ -1,0 +1,13 @@
+FlipDex v1.02 — mise en ligne
+================================
+Copier TOUT le dossier tel quel (y compris le dossier icons/ et les fichiers
+apple-touch-icon*.png et favicon.ico à la racine). Sans eux, l'iPhone n'affiche
+pas le logo sur l'écran d'accueil.
+
+Vérification rapide : ouvrir dans Safari  <adresse-de-l-app>/apple-touch-icon.png
+-> la bulle doit s'afficher. Sinon, le fichier n'a pas été copié.
+
+iPhone : une icône déjà ajoutée n'est jamais mise à jour. Supprimer l'icône de
+l'écran d'accueil puis la rajouter (Partager > Sur l'écran d'accueil).
+
+À chaque modification visible : incrémenter APP_VERSION dans sw.js.
