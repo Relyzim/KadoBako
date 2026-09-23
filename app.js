@@ -1369,7 +1369,7 @@ window.addEventListener("beforeinstallprompt",e=>{ e.preventDefault(); installPr
 $("btnInstall").addEventListener("click",async()=>{
   if(!installPrompt) return; installPrompt.prompt();
   const {outcome}=await installPrompt.userChoice; installPrompt=null; $("btnInstall").hidden=true;
-  if(outcome==="accepted") toast("FlipDex installée");
+  if(outcome==="accepted") toast("KadoBako installée");
 });
 window.addEventListener("appinstalled",()=>{ installPrompt=null; $("btnInstall").hidden=true; });
 // iPhone / iPad : pas de bouton d'installation automatique, on explique la marche à suivre
