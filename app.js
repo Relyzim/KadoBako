@@ -15,7 +15,11 @@ const todayStr=()=>localISO();
 const daysBetween=(a,b)=>Math.max(0,Math.round((new Date(b)-new Date(a))/86400000));
 
 /* ---------- Persistance : IndexedDB (photos à part) + repli localStorage ---------- */
+// Noms internes volontairement inchangés (ancien nom FlipDex) : les modifier ferait perdre les données déjà enregistrées
 const LS_KEY="flipdex_v1", JOURNAL_KEY="flipdex_journal";
+const PHOTO_FIELDS=[["userPhoto",""],["userPhoto2","#verso"]];          // champ -> suffixe de clé dans le magasin photos
+const stripPhotos=(it)=>{ const {userPhoto, userPhoto2, ...rest}=it; return rest; };
+const photoCount=(items)=>items.reduce((n,it)=>n+PHOTO_FIELDS.filter(([f])=>it[f]).length,0);
 const Store=(()=>{
   let db=null, mode="memory", migrated=false, recovered=false;
   const photoSig=new Map();                       // id -> signature de la photo déjà écrite
@@ -36,13 +40,13 @@ const Store=(()=>{
     return { st, photos:new Map(keys.map((k,i)=>[k,vals[i]])) };
   }
   async function writeIDB(s){
-    const strip=(it)=>{ const {userPhoto, ...rest}=it; return rest; };
+    const strip=stripPhotos;
     const all=[...s.items, ...(s.trash||[]).map(t=>t.item)];
     const clean={...s, items:s.items.map(strip), trash:(s.trash||[]).map(t=>({...t, item:strip(t.item)}))};
     const t=db.transaction(["kv","photos"],"readwrite"), ps=t.objectStore("photos");
     t.objectStore("kv").put(clean,"state");
     const next=new Map();
-    for(const it of all){ if(!it.userPhoto) continue; const g=sig(it.userPhoto); next.set(it.id,g); if(photoSig.get(it.id)!==g) ps.put(it.userPhoto,it.id); }
+    for(const it of all) for(const [f,sfx] of PHOTO_FIELDS){ const v=it[f]; if(!v) continue; const k=it.id+sfx, g=sig(v); next.set(k,g); if(photoSig.get(k)!==g) ps.put(v,k); }
     for(const id of photoSig.keys()) if(!next.has(id)) ps.delete(id);
     await txDone(t);
     photoSig.clear(); next.forEach((g,id)=>photoSig.set(id,g));   // mis à jour seulement si l'écriture a réussi
@@ -63,15 +67,15 @@ const Store=(()=>{
           if(legacy && Array.isArray(legacy.items)){
             await writeIDB(legacy);
             const chk=await readIDB();
-            if(chk.st && chk.st.items.length===legacy.items.length && chk.photos.size===legacy.items.filter(i=>i.userPhoto).length){
+            if(chk.st && chk.st.items.length===legacy.items.length && chk.photos.size===photoCount(legacy.items)){
               try{ localStorage.removeItem(LS_KEY); }catch(e){}
               migrated=true; st=chk.st; photos=chk.photos;
             } else { throw new Error("Migration non vérifiée"); }
           }
         }
         if(st && Array.isArray(st.items)){
-          st.items.forEach(it=>{ it.userPhoto = photos.get(it.id) || null; });
-          (st.trash||[]).forEach(t=>{ if(t&&t.item) t.item.userPhoto = photos.get(t.item.id) || null; });
+          const attach=(it)=>PHOTO_FIELDS.forEach(([f,sfx])=>{ it[f]=photos.get(it.id+sfx)||null; });
+          st.items.forEach(attach); (st.trash||[]).forEach(t=>{ if(t&&t.item) attach(t.item); });
         }
         return st||null;
       }catch(e){ console.error("IndexedDB inutilisable, repli localStorage :", e); db=null; mode="memory"; }
@@ -123,7 +127,7 @@ function flushSave(){
 // Fermeture pendant une écriture : copie de secours synchrone (sans les photos, déjà stockées à part)
 function writeJournal(){
   if(!storeReady || Store.mode!=="idb" || !(saving||saveQueued)) return;
-  try{ const strip=(it)=>{ const {userPhoto, ...rest}=it; return rest; };
+  try{ const strip=stripPhotos;
     localStorage.setItem(JOURNAL_KEY, JSON.stringify({...state, items:state.items.map(strip), trash:(state.trash||[]).map(t=>({...t,item:strip(t.item)}))})); }catch(e){}
 }
 function clearJournal(){ try{ localStorage.removeItem(JOURNAL_KEY); }catch(e){} }
@@ -238,7 +242,10 @@ function visualGen(it){ return it.type==="sealed"
   : cardSVG(it.catalog.name, it.catalog.number, it.catalog.set.name); }
 
 /* ---------- Catalogue TCGdex + fallback ---------- */
-const TCG="https://api.tcgdex.net/v2/fr";
+const TCG_BASE="https://api.tcgdex.net/v2/";
+const LANG_LABEL={fr:"FR",en:"EN",ja:"JP"};
+let catalogLang="fr";
+const tcg=(l)=>TCG_BASE+(l||"fr");
 const img=(base,q="high")=>base?base+"/"+q+".webp":"";
 const FALLBACK={
   series:[{id:"sv",name:"Écarlate et Violet"},{id:"swsh",name:"Épée et Bouclier"}],
@@ -261,18 +268,23 @@ const FALLBACK={
 const cache={sets:{},cards:{},detail:{}};
 let usingFallback=false;
 async function jget(url){const r=await fetch(url,{headers:{Accept:"application/json"}});if(!r.ok)throw new Error(r.status);return r.json();}
-async function loadSeries(){try{const d=await jget(TCG+"/series");return d.map(s=>({id:s.id,name:s.name}));}catch(e){usingFallback=true;return FALLBACK.series;}}
-async function loadSets(id){if(cache.sets[id])return cache.sets[id];let sets;
-  if(usingFallback){sets=FALLBACK.sets[id]||[];}
-  else{try{const d=await jget(TCG+"/series/"+id);sets=(d.sets||[]).map(s=>({id:s.id,name:s.name}));}catch(e){usingFallback=true;sets=FALLBACK.sets[id]||[];}}
-  cache.sets[id]=sets;return sets;}
-async function loadCards(setId){if(cache.cards[setId])return cache.cards[setId];let cards;
-  if(usingFallback){cards=FALLBACK.cards[setId]||[];}
-  else{try{const d=await jget(TCG+"/sets/"+setId);cards=(d.cards||[]).map(c=>({id:c.id,localId:c.localId,name:c.name,image:c.image}));}catch(e){cards=FALLBACK.cards[setId]||[];}}
-  cache.cards[setId]=cards;return cards;}
-async function loadCardDetail(id){ if(cache.detail[id]) return cache.detail[id];
-  if(usingFallback) return null;
-  try{ const d=await jget(TCG+"/cards/"+id); cache.detail[id]=d; return d; }catch(e){ cache.detail[id]=null; return null; } }
+// Le jeu de démo intégré n'existe qu'en français ; les autres langues nécessitent le réseau
+async function loadSeries(){ const L=catalogLang;
+  try{ const d=await jget(tcg(L)+"/series"); return d.map(s=>({id:s.id,name:s.name})); }
+  catch(e){ if(L==="fr"){ usingFallback=true; return FALLBACK.series; } return []; } }
+async function loadSets(id){ const L=catalogLang, k=L+":"+id; if(cache.sets[k]) return cache.sets[k]; let sets;
+  if(usingFallback && L==="fr"){ sets=FALLBACK.sets[id]||[]; }
+  else{ try{ const d=await jget(tcg(L)+"/series/"+id); sets=(d.sets||[]).map(s=>({id:s.id,name:s.name})); }
+        catch(e){ if(L==="fr"){ usingFallback=true; sets=FALLBACK.sets[id]||[]; } else sets=[]; } }
+  cache.sets[k]=sets; return sets; }
+async function loadCards(setId){ const L=catalogLang, k=L+":"+setId; if(cache.cards[k]) return cache.cards[k]; let cards;
+  if(usingFallback && L==="fr"){ cards=FALLBACK.cards[setId]||[]; }
+  else{ try{ const d=await jget(tcg(L)+"/sets/"+setId); cards=(d.cards||[]).map(c=>({id:c.id,localId:c.localId,name:c.name,image:c.image})); }
+        catch(e){ cards = L==="fr" ? (FALLBACK.cards[setId]||[]) : []; } }
+  cache.cards[k]=cards; return cards; }
+async function loadCardDetail(id, lang, fresh){ const L=lang||catalogLang, k=L+":"+id; if(!fresh && (k in cache.detail)) return cache.detail[k];
+  if(usingFallback && L==="fr") return null;
+  try{ const d=await jget(tcg(L)+"/cards/"+id); cache.detail[k]=d; return d; }catch(e){ return null; } }   // échec non mémorisé : réessayé plus tard
 
 /* ---------- Prix marché (réel via TCGdex pricing) ---------- */
 // Cardmarket = EUR (référence) ; TCGplayer = USD (converti). eBay = slot à brancher (backend perso).
@@ -327,7 +339,10 @@ function dealCheck(purchase, ref){
   if(r<=1.00) return {cls:"at", lbl:"Correct"};
   return {cls:"over", lbl:"Au-dessus du marché"};
 }
-async function fetchMarket(cardId, variant){ const d=await loadCardDetail(cardId); return extractMarket(d&&d.pricing, variant||undefined); }
+// fresh = vraie requête réseau (actualisation) ; sinon les données déjà chargées dans la session suffisent
+async function fetchMarket(cardId, variant, lang, fresh){ const d=await loadCardDetail(cardId, lang, fresh); return extractMarket(d&&d.pricing, variant||undefined); }
+// Prix de référence d'une ligne : ton prix perso s'il existe, sinon le prix automatique
+const refOf=(it)=> it.manualRef>0 ? it.manualRef : (it.market?.ref ?? null);
 
 // signal indiqué vs marché
 function priceSignal(asking, ref){
@@ -394,10 +409,13 @@ function matchSearch(it){
   if(!search) return true; const q=search.toLowerCase();
   return [it.catalog.name,it.catalog.set.name,it.catalog.number,(it.tags||[]).join(" "),it.notes,VARIANT_LABEL[it.variant],it.location]
     .filter(Boolean).join(" ").toLowerCase().includes(q); }
+// ROI réel pour une vente, ROI estimé (frais compris) pour une ligne en stock
+const roiOf=(it)=>{ if(it.status==="sold") return roiItem(it); const inv=(it.acquisition.purchasePrice||0)*qtyOf(it); return inv>0 ? latentMargin(it)/inv*100 : -Infinity; };
 function sortItems(arr){
   const s=arr.slice();
   const key={ recent:(a,b)=>new Date(b.createdAt)-new Date(a.createdAt),
     margin:(a,b)=>(b.status==="sold"?realMargin(b):latentMargin(b))-(a.status==="sold"?realMargin(a):latentMargin(a)),
+    roi:(a,b)=>roiOf(b)-roiOf(a),
     asking:(a,b)=>(b.listing?.askingPrice||0)-(a.listing?.askingPrice||0),
     age:(a,b)=>(stockAge(b)||0)-(stockAge(a)||0),
     set:(a,b)=>a.catalog.set.name.localeCompare(b.catalog.set.name),
@@ -412,6 +430,13 @@ function sparkline(h){
   const xy=pts.map((v,i)=>`${(1+i*(W-2)/(pts.length-1)).toFixed(1)},${(H-1-(v-mn)/sp*(H-2)).toFixed(1)}`).join(" ");
   const lbl=`${pts.length} relevés : ${fmt(pts[0])} → ${fmt(pts[pts.length-1])}`;
   return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(lbl)}"><title>${esc(lbl)}</title><polyline points="${xy}"/></svg>`;
+}
+const expandedIds=new Set();
+/* Journal : chaque étape importante d'une ligne (achat, mise en vente, prix, vente…) */
+function logEvent(it, text, at){
+  it.log=Array.isArray(it.log)?it.log:[];
+  it.log.push({at:at||new Date().toISOString(), text});
+  if(it.log.length>60) it.log=[it.log[0],...it.log.slice(-59)];
 }
 function itemNode(it){
   const el=document.createElement("div"); el.className="item";
@@ -438,35 +463,50 @@ function itemNode(it){
   if(it.status==="listed"&&it.listing?.platform) statusLbl="En vente · "+it.listing.platform;
   if(it.status==="sold"&&it.sale?.platform) statusLbl="Vendu · "+it.sale.platform;
 
-  const gradeTag = it.grading?.company ? `<span class="tag grade">${it.grading.company} ${it.grading.grade??""}</span>` : "";
-  const sig = it.status!=="sold" ? priceSignal(it.listing?.askingPrice, it.market?.ref) : null;
-  const sigTag = sig ? `<span class="tag ${sig.cls}">${sig.lbl}</span>` : "";
-  const staleTag = stale ? `<span class="tag stale">Dort ${ageD} j</span>` : "";
-  const costTag = belowCost(it) ? `<span class="tag cost" title="Prix indiqué, frais déduits, inférieur au prix d'achat">Sous le coût</span>` : "";
-  const varTag = (it.variant && it.variant!=="normal") ? `<span class="tag var">${esc(VARIANT_LABEL[it.variant]||it.variant)}</span>` : "";
-  const labelTags = (it.tags||[]).map(t=>`<span class="tag label">${esc(t)}</span>`).join("");
+  // Identité de la carte : dans la ligne de texte (plus dans les badges)
+  const ident=[esc(it.catalog.set.name)];
+  if(it.catalog.number) ident.push("n°"+esc(it.catalog.number));
+  if(it.variant && it.variant!=="normal") ident.push(esc(VARIANT_LABEL[it.variant]||it.variant));
+  if(it.grading?.company) ident.push(esc((it.grading.company+" "+(it.grading.grade??"")).trim()));
+  ident.push(it.type==="sealed" ? (it.condition==="USED"?"Occasion":"Scellé") : esc(cond));
+  if(it.catalog.language && it.catalog.language!=="fr") ident.push(LANG_LABEL[it.catalog.language]||esc(it.catalog.language));
+  if(ageTxt) ident.push(ageTxt);
+  if(it.location) ident.push("📍 "+esc(it.location));
+
+  // Signaux, par ordre d'importance : 2 visibles, le reste replié derrière « +N »
+  const ref=refOf(it), signals=[];
+  if(belowCost(it)) signals.push(`<span class="tag cost" title="Prix indiqué, frais déduits, inférieur au prix d'achat">Sous le coût</span>`);
+  (it.tags||[]).forEach(t=>signals.push(`<span class="tag label">${esc(t)}</span>`));
   const timing = it.status!=="sold" ? sellTiming(it.market) : null;
-  const timingTag = timing ? `<span class="tag ${timing.cls}">${timing.lbl}</span>` : "";
-  const locTxt = it.location ? ` · 📍 ${esc(it.location)}` : "";
-  const condBadge = it.type==="sealed" ? (it.condition==="USED"?"Occasion":"Scellé") : cond;
-  const numTxt = it.catalog.number ? ` · n°${esc(it.catalog.number)}` : "";
+  if(timing) signals.push(`<span class="tag ${timing.cls}">${timing.lbl}</span>`);
+  if(stale) signals.push(`<span class="tag stale">Dort ${ageD} j</span>`);
+  const sig = it.status!=="sold" ? priceSignal(it.listing?.askingPrice, ref) : null;
+  if(sig) signals.push(`<span class="tag ${sig.cls}">${sig.lbl}</span>`);
+  const open=expandedIds.has(it.id), shown=open?signals:signals.slice(0,2), hidden=signals.length-shown.length;
+  const moreBtn = hidden>0 ? `<button type="button" class="tag more" data-act="more" data-id="${it.id}" aria-label="Afficher ${hidden} autre(s) indicateur(s)">+${hidden}</button>`
+               : (open && signals.length>2 ? `<button type="button" class="tag more" data-act="more" data-id="${it.id}">moins</button>` : "");
+
+  const dropBtn = (stale && it.status!=="sold" && (it.listing?.askingPrice||0)>0) ? `<button class="mini" data-act="drop" data-id="${it.id}" title="Baisser le prix indiqué de 10 %">−10 %</button>` : "";
+  const hasPhoto=!!(it.userPhoto||it.userPhoto2);
+  const thumb = hasPhoto
+    ? `<button type="button" class="thumb" data-act="photo" data-id="${it.id}" aria-label="Voir les photos de ${esc(it.catalog.name)}"><img alt="" loading="lazy">${q>1?`<span class="qty">×${q}</span>`:""}</button>`
+    : `<div class="thumb"><img alt="" loading="lazy">${q>1?`<span class="qty">×${q}</span>`:""}</div>`;
 
   el.innerHTML=`
-    <div class="thumb"><img alt="" loading="lazy">${q>1?`<span class="qty">×${q}</span>`:""}</div>
+    ${thumb}
     <div class="meta">
       <div class="name">${esc(it.catalog.name)}</div>
-      <div class="sub">${esc(it.catalog.set.name)}${numTxt}${ageTxt?" · "+ageTxt:""}${locTxt}</div>
+      <div class="sub">${ident.join(" · ")}</div>
       <div class="badges">
-        <span class="tag ${statusTag}">${esc(statusLbl)}</span>
-        <span class="tag cond">${condBadge}</span>${varTag}${gradeTag}${sigTag}${costTag}${timingTag}${staleTag}${labelTags}
+        <span class="tag ${statusTag}">${esc(statusLbl)}</span>${shown.join("")}${moreBtn}
       </div>
       ${it.notes?`<div class="note" title="${esc(it.notes)}">📝 ${esc(String(it.notes).split("\n")[0])}</div>`:""}
     </div>
     <div class="money-col">
       <div class="mrow"><span class="k">Achat${q>1?" ×"+q:""}</span><span class="v">${fmt(it.acquisition.purchasePrice*q)}</span></div>
-      ${it.market?.ref?`<div class="mrow"><span class="k">Marché</span><span class="v">${sparkline(it.priceHistory)}${fmtEUR(it.market.ref)}</span></div>`:""}
+      ${ref?`<div class="mrow"><span class="k">Marché${it.manualRef>0?" (perso)":""}</span><span class="v">${sparkline(it.priceHistory)}${fmtEUR(ref)}</span></div>`:""}
       ${marginLine}
-      <div class="acts">${acts}${annonceBtn}<button class="mini" data-act="edit" data-id="${it.id}">Éditer</button><button class="mini del" data-act="del" data-id="${it.id}" aria-label="Supprimer ${esc(it.catalog.name)}" title="Supprimer">✕</button></div>
+      <div class="acts">${acts}${dropBtn}${annonceBtn}<button class="mini" data-act="edit" data-id="${it.id}">Éditer</button><button class="mini del" data-act="del" data-id="${it.id}" aria-label="Supprimer ${esc(it.catalog.name)}" title="Supprimer">✕</button></div>
     </div>`;
   mountImg(el.querySelector(".thumb img"), it.userPhoto||it.catalog.imageUrl, visualGen(it));
   return el;
@@ -504,12 +544,36 @@ function renderList(){
       : `<div class="empty"><b>Rien ici pour l'instant</b>Choisis un set puis une carte pour créer ta première ligne de stock.</div>`;
     else active.forEach(it=>wrap.appendChild(node(it)));
   }
-  const sold=sortItems(state.items.filter(i=>i.status==="sold"&&matchSearch(i)));
-  if((filter==="all"||filter==="sold")&&sold.length){ hw.hidden=false; hl.innerHTML=""; sold.forEach(it=>hl.appendChild(node(it))); }
-  else hw.hidden=true;
-  if(filter==="sold"&&sold.length===0) wrap.innerHTML=`<div class="empty"><b>Aucune vente</b>Tes cartes vendues et leurs marges apparaîtront ici.</div>`;
+  const soldAll=state.items.filter(i=>i.status==="sold"&&matchSearch(i));
+  renderHistFilters(soldAll);
+  const sold=sortItems(soldAll.filter(matchHist));
+  if((filter==="all"||filter==="sold")&&soldAll.length){
+    hw.hidden=false; hl.innerHTML="";
+    if(sold.length) sold.forEach(it=>hl.appendChild(node(it)));
+    else hl.innerHTML=`<div class="empty"><b>Aucune vente</b>Aucune vente pour ce lieu ou cette période.</div>`;
+    const tot=sold.reduce((s,i)=>s+realMargin(i),0);
+    $("histSum").textContent = sold.length ? `· ${sold.length} vente${sold.length>1?"s":""} · ${fmt(tot)}` : "";
+  } else hw.hidden=true;
+  if(filter==="sold"&&soldAll.length===0) wrap.innerHTML=`<div class="empty"><b>Aucune vente</b>Tes cartes vendues et leurs marges apparaîtront ici.</div>`;
 }
 $("tagFilter").addEventListener("change",e=>{ tagSel=e.target.value; renderList(); });
+let histPlat="", histPer="";
+function matchHist(it){
+  if(histPlat && it.sale?.platform!==histPlat) return false;
+  const d=it.sale?.date||"", now=new Date();
+  if(histPer==="month") return monthOf(d)===localISO(now).slice(0,7);
+  if(histPer==="3m") return d>=localISO(new Date(now.getFullYear(),now.getMonth()-2,1));
+  if(histPer==="year") return d.slice(0,4)===String(now.getFullYear());
+  return true;
+}
+function renderHistFilters(sold){
+  const plats=[...new Set(sold.map(i=>i.sale?.platform).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"fr"));
+  if(histPlat && !plats.includes(histPlat)) histPlat="";
+  $("histPlatform").innerHTML=`<option value="">Tous les lieux</option>`+plats.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  $("histPlatform").value=histPlat; $("histPeriod").value=histPer;
+}
+$("histPlatform").addEventListener("change",e=>{ histPlat=e.target.value; renderList(); });
+$("histPeriod").addEventListener("change",e=>{ histPer=e.target.value; renderList(); });
 $("viewList").addEventListener("click",()=>{ state.settings.view="list"; persist(); renderList(); });
 $("viewGallery").addEventListener("click",()=>{ state.settings.view="gallery"; persist(); renderList(); });
 
@@ -533,7 +597,21 @@ function renderGoal(){
 }
 $("goalBar").addEventListener("click",e=>{ if(e.target.id==="goalSet"){ openSettings(); setTimeout(()=>$("stGoal").focus(),50); } });
 
-function renderAll(){ renderKPIs(); renderGoal(); renderList(); updateWishCount(); updateTrashCount(); updateStoreNote(); }
+/* ---------- Rappel de sauvegarde ---------- */
+const BACKUP_DAYS=7;
+function renderBackup(){
+  const box=$("backupBar"), s=state.settings, now=Date.now();
+  const last=s.lastExport ? new Date(s.lastExport).getTime() : 0, days=last ? Math.floor((now-last)/86400000) : null;
+  const due = state.items.length>0 && (days===null || days>=BACKUP_DAYS) && !(s.backupSnooze && now<new Date(s.backupSnooze).getTime());
+  box.hidden=!due; if(!due) return;
+  box.innerHTML=`<span>⚠ ${days===null ? "Ton stock n'a jamais été sauvegardé hors de ce téléphone." : `Dernière sauvegarde il y a ${days} jours.`} Si tu perds ou changes d'appareil, tes données seront perdues.</span>
+    <span class="bb-acts"><button class="mini go" type="button" id="backupNow">Sauvegarder</button><button class="mini" type="button" id="backupLater">Plus tard</button></span>`;
+}
+$("backupBar").addEventListener("click",e=>{
+  if(e.target.id==="backupNow") $("btnExport").click();
+  if(e.target.id==="backupLater"){ state.settings.backupSnooze=new Date(Date.now()+3*86400000).toISOString(); persist(); renderBackup(); toast("Rappel reporté de 3 jours"); }
+});
+function renderAll(){ renderBackup(); renderKPIs(); renderGoal(); renderList(); updateWishCount(); updateTrashCount(); updateStoreNote(); }
 
 /* ---------- Sélection carte + marché + conseil ---------- */
 let selected=null, selMarket=null, entryMode="card";
@@ -555,10 +633,18 @@ function applyMode(m){
 $("modeCard").addEventListener("click",()=>applyMode("card"));
 $("modeSealed").addEventListener("click",()=>applyMode("sealed"));
 async function initPickers(){
+  const sel=$("selSerie"), L=catalogLang; sel.disabled=true; sel.innerHTML=`<option value="">Chargement…</option>`;
+  ["selSet","selCard","selProduct"].forEach(id=>{ const s=$(id); s.disabled=true; s.innerHTML=`<option value="">—</option>`; });
   const series=await loadSeries();
-  $("selSerie").innerHTML=`<option value="">— choisir —</option>`+series.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("");
-  if(usingFallback) toast("Catalogue de démo (API TCGdex non joignable ici)");
+  if(L!==catalogLang) return;                                     // la langue a changé entre-temps
+  sel.innerHTML = series.length ? `<option value="">— choisir —</option>`+series.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("")
+                                : `<option value="">Catalogue ${LANG_LABEL[L]} indisponible (hors-ligne ?)</option>`;
+  sel.disabled=!series.length;
+  if(usingFallback && L==="fr") toast("Catalogue de démo (API TCGdex non joignable ici)");
 }
+function renderLangPick(){ document.querySelectorAll("#langPick [data-lang]").forEach(b=>b.setAttribute("aria-pressed", b.dataset.lang===catalogLang)); }
+$("langPick").addEventListener("click",e=>{ const b=e.target.closest("[data-lang]"); if(!b || b.dataset.lang===catalogLang) return;
+  catalogLang=b.dataset.lang; state.settings.catalogLang=catalogLang; persist(); renderLangPick(); clearSelection(); initPickers(); });
 $("selSerie").addEventListener("change",async e=>{
   const set=$("selSet"),card=$("selCard"),prod=$("selProduct");
   set.disabled=true;card.disabled=true;card.innerHTML=`<option value="">—</option>`;
@@ -595,7 +681,7 @@ $("selCard").addEventListener("change",async e=>{
   const setId=$("selSet").value; const cards=await loadCards(setId); const c=cards.find(x=>x.id===e.target.value); if(!c)return;
   const setName=$("selSet").selectedOptions[0].textContent, serieName=$("selSerie").selectedOptions[0].textContent;
   pendingWishId=null;
-  selected={id:c.id,name:c.name,number:c.localId,language:"fr",set:{id:setId,name:setName,series:serieName},imageUrl:img(c.image,"high")};
+  selected={id:c.id,name:c.name,number:c.localId,language:catalogLang,set:{id:setId,name:setName,series:serieName},imageUrl:img(c.image,"high")};
   renderSelectedPreview(); validateForm();
   $("mktBox").hidden=true; selMarket=null; updateSuggest();
   await fillVariants(c.id);
@@ -613,9 +699,9 @@ function renderMktBox(m){
 /* ---------- Variantes : seules celles qui existent pour la carte sont proposées ---------- */
 let variantTok=0;
 const VARIANT_ALL_OPTS=`<option value="">Non précisée</option>`+VARIANT_ORDER.map(v=>`<option value="${v}">${VARIANT_LABEL[v]}</option>`).join("");
-async function fillVariants(cardId, preferred){
+async function fillVariants(cardId, preferred, lang){
   const tok=++variantTok, sel=$("selVariant"); sel.disabled=true;
-  const d=await loadCardDetail(cardId);
+  const d=await loadCardDetail(cardId, lang||selected?.language);
   if(tok!==variantTok) return;                               // une autre carte a été choisie entre-temps
   const avail=availableVariants(d);
   sel.innerHTML = avail.length ? avail.map(v=>`<option value="${v}">${VARIANT_LABEL[v]}</option>`).join("") : VARIANT_ALL_OPTS;
@@ -626,7 +712,7 @@ async function fillVariants(cardId, preferred){
 }
 $("selVariant").addEventListener("change",()=>{
   if(!selected || selected.sealed) return;
-  const d=cache.detail[selected.id];
+  const d=cache.detail[(selected.language||catalogLang)+":"+selected.id];
   if(d) selMarket=extractMarket(d.pricing, $("selVariant").value||undefined);
   renderMktBox(selMarket); updateSuggest();
 });
@@ -634,9 +720,9 @@ function updateSuggest(){
   if(!selected){ $("suggestBox").hidden=true; $("dealBox").hidden=true; $("askWarn").hidden=true; $("btnWishAdd").hidden=true; return; }
   $("btnWishAdd").hidden = !!selected.sealed;
   const pa=parseFloat($("inPurchase").value)||0;
-  const s=suggestPrice(pa, selMarket?.ref);
+  const s=suggestPrice(pa, entryRef());
   $("suggestBox").hidden=false; $("suggestVal").textContent=fmtEUR(s);
-  const dc=dealCheck(pa, selMarket?.ref);
+  const dc=dealCheck(pa, entryRef());
   if(dc){ $("dealBox").hidden=false; const t=$("dealTag"); t.className="tag "+dc.cls; t.textContent=dc.lbl; }
   else $("dealBox").hidden=true;
   // Session d'achat : le prix de revente conseillé est rempli tout seul (tant que tu ne le modifies pas)
@@ -650,7 +736,9 @@ function updateAskWarn(){
   else w.hidden=true;
 }
 $("inAsking").addEventListener("input",()=>{ askAuto=false; updateAskWarn(); });
-$("applySuggest").addEventListener("click",()=>{ const pa=parseFloat($("inPurchase").value)||0; $("inAsking").value=(suggestPrice(pa,selMarket?.ref)).toFixed(2); validateForm(); });
+const entryRef=()=>{ const m=parseFloat($("inManualRef").value); return m>0 ? m : (selMarket?.ref ?? null); };
+$("inManualRef").addEventListener("input",()=>updateSuggest());
+$("applySuggest").addEventListener("click",()=>{ const pa=parseFloat($("inPurchase").value)||0; $("inAsking").value=(suggestPrice(pa,entryRef())).toFixed(2); validateForm(); });
 function renderSelectedPreview(){
   const pv=$("preview");
   if(!selected){ const ph=entryMode==="sealed"?"Le produit scellé<br>s'affichera ici":"La carte sélectionnée<br>s'affichera ici"; pv.innerHTML=`<span class="ph">${ph}</span>`; return; }
@@ -683,14 +771,19 @@ function buildNewItem(){
     location:$("inLoc").value.trim()||null, tags, notes:null,
     acquisition:{purchasePrice:pa,currency,date}, listing:{askingPrice:ask,currency,platform:null,listedDate:null},
     sale:null, status:"stock", createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
-  if(selected.sealed) return {...base, type:"sealed", variant:null, market:null, priceHistory:[],
-    catalog:{source:"manual",productType:selected.productType,name:selected.name,set:selected.set,number:null,language:"fr",imageUrl:null}};
+  const mr=round2(parseFloat($("inManualRef").value)||0);
+  if(mr>0){ base.manualRef=mr; base.manualRefDate=date; }
+  if(selected.sealed) return {...base, type:"sealed", variant:null, market:null, priceHistory: mr>0?[{date,ref:mr,manual:true}]:[],
+    catalog:{source:"manual",productType:selected.productType,name:selected.name,set:selected.set,number:null,language:catalogLang,imageUrl:null}};
   const mkt=marketSnapshot(selMarket);
-  return {...base, type:"card", variant:$("selVariant").value||null, market:mkt, priceHistory: mkt?[{date,ref:mkt.ref}]:[],
+  return {...base, type:"card", variant:$("selVariant").value||null, market:mkt,
+    priceHistory: mr>0 ? [{date,ref:mr,manual:true}] : (mkt?[{date,ref:mkt.ref}]:[]),
     catalog:{source:"tcgdex",cardId:selected.id,name:selected.name,set:selected.set,number:selected.number,language:selected.language,imageUrl:selected.imageUrl}};
 }
+const langOf=(c)=>(c && c.language) || "fr";
 function findDuplicate(n){
-  return state.items.find(o=>o.status==="stock" && o.type===n.type && o.condition===n.condition && !o.grading &&
+  // même langue obligatoire : une carte FR et sa version EN sont deux produits différents
+  return state.items.find(o=>o.status==="stock" && o.type===n.type && o.condition===n.condition && !o.grading && langOf(o.catalog)===langOf(n.catalog) &&
     (n.type==="sealed"
       ? (o.catalog.productType===n.catalog.productType && o.catalog.set?.id===n.catalog.set?.id && o.catalog.name===n.catalog.name)
       : (o.catalog.cardId===n.catalog.cardId && (o.variant||null)===(n.variant||null))));
@@ -725,13 +818,15 @@ function commitAdd(n, into){
     into.tags=[...new Set([...(into.tags||[]),...n.tags])];
     if(n.market){ into.market=n.market; into.priceHistory=into.priceHistory||[]; if(!into.priceHistory.some(h=>h.date===todayStr())) into.priceHistory.push({date:todayStr(),ref:n.market.ref}); }
     into.updatedAt=new Date().toISOString();
+    logEvent(into, `Lot complété : +${q2} à ${fmt(n.acquisition.purchasePrice)} (coût moyen ${fmt(into.acquisition.purchasePrice)})`);
     msg=`Ajouté au lot existant (×${into.quantity})`;
-  } else { state.items.push(n); msg = qtyOf(n)>1 ? `Lot de ${qtyOf(n)} ajouté` : "Ajouté au stock"; }
+  } else { logEvent(n, `Acheté ×${qtyOf(n)} à ${fmt(n.acquisition.purchasePrice)}`, n.acquisition.date+"T12:00:00");
+    state.items.push(n); msg = qtyOf(n)>1 ? `Lot de ${qtyOf(n)} ajouté` : "Ajouté au stock"; }
   if(state.session.active){ state.session.count+=qtyOf(n); state.session.spent=round2(state.session.spent+n.acquisition.purchasePrice*qtyOf(n)); }
   if(pendingWishId){ state.wishlist=state.wishlist.filter(w=>w.id!==pendingWishId); msg+=" · retirée de ta liste d'achats"; }
   persist(); renderAll(); renderSession();
   // remise à zéro : en session, on garde série, set, date, emplacement et état pour enchaîner
-  $("inPurchase").value=""; $("inAsking").value=""; $("inQty").value="1"; $("inProdName").value=""; $("selCard").value=""; $("selProduct").value="";
+  $("inPurchase").value=""; $("inAsking").value=""; $("inQty").value="1"; $("inManualRef").value=""; $("inProdName").value=""; $("selCard").value=""; $("selProduct").value="";
   if(!state.session.active){ $("inLoc").value=""; $("inDate").value=todayStr(); }
   clearSelection();
   toast(msg);
@@ -776,6 +871,9 @@ document.body.addEventListener("click",e=>{
   else if(act==="purge") purgeItem(id);
   else if(act==="wbuy") buyFromWish(id);
   else if(act==="wdel") removeWish(id);
+  else if(act==="more"){ expandedIds.has(id)?expandedIds.delete(id):expandedIds.add(id); renderList(); }
+  else if(act==="drop") dropPrice(id);
+  else if(act==="photo") openPhotoViewer(id);
   else if(act==="list"){pendingId=id;openListModal(id);}
   else if(act==="sell"){pendingId=id;openSoldModal(id);}
   else if(act==="edit"){pendingId=id;openEditModal(id);}
@@ -788,7 +886,7 @@ function slug(s){return String(s||"").toLowerCase().normalize("NFD").replace(/[\
 function openListingGen(id){
   const it=state.items.find(i=>i.id===id); if(!it) return;
   const c=it.catalog;
-  const price=(it.listing?.askingPrice||suggestPrice(it.acquisition.purchasePrice,it.market?.ref));
+  const price=(it.listing?.askingPrice||suggestPrice(it.acquisition.purchasePrice,refOf(it)));
   let title, body, tags;
   if(it.type==="sealed"){
     const etat = it.condition==="USED"?"Occasion (bon état)":"Neuf, scellé d'usine";
@@ -858,6 +956,7 @@ $("mlPrice").addEventListener("input",()=>{ $("mlNet").value=""; updateListCalc(
 $("mlConfirm").addEventListener("click",()=>{const it=state.items.find(i=>i.id===pendingId);if(!it)return;
   const price=parseFloat($("mlPrice").value); if(price>0) it.listing.askingPrice=round2(price);
   it.status="listed"; it.listing.platform=readPlatform("mlPlatform","mlCustom"); it.listing.listedDate=it.listing.listedDate||todayStr();
+  logEvent(it, `Mis en vente sur ${it.listing.platform} à ${fmt(it.listing.askingPrice)}`);
   it.updatedAt=new Date().toISOString(); persist();closeModals();renderAll();toast("Mise en vente");});
 
 /* ---------- Modal vendu ---------- */
@@ -897,13 +996,15 @@ $("msConfirm").addEventListener("click",()=>{const it=state.items.find(i=>i.id==
   const total=qtyOf(it); const soldQty=Math.min(total,Math.max(1,parseInt($("msQty").value)||1));
   const sale={soldPrice:price,currency,date:todayStr(),platform:readPlatform("msPlatform","msCustom"),
     fees:{platformFee:parseFloat($("msFee").value)||0,shipping:parseFloat($("msShip").value)||0}};
-  if(soldQty>=total){ it.status="sold"; it.sale=sale; it.updatedAt=new Date().toISOString(); }
+  const soldTxt=`Vendu ×${soldQty} à ${fmt(price)} sur ${sale.platform}`;
+  if(soldQty>=total){ it.status="sold"; it.sale=sale; logEvent(it, soldTxt); it.updatedAt=new Date().toISOString(); }
   else {
     // split : nouvel item vendu pour la partie écoulée, l'original garde le reste
     const soldItem=JSON.parse(JSON.stringify(it));
     soldItem.id="it_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     soldItem.quantity=soldQty; soldItem.status="sold"; soldItem.sale=sale; soldItem.updatedAt=new Date().toISOString();
     it.quantity=total-soldQty; it.updatedAt=new Date().toISOString();
+    logEvent(soldItem, soldTxt); logEvent(it, `${soldQty} vendu(s) sur ${sale.platform}, ${it.quantity} restant(s)`);
     state.items.push(soldItem);
     toast(`${soldQty} vendu(s), ${it.quantity} restant(s)`);
     persist();closeModals();renderAll(); return;
@@ -921,7 +1022,10 @@ function openEditModal(id){const it=state.items.find(i=>i.id===id);if(!it)return
   $("mePurchase").value=it.acquisition.purchasePrice??""; $("meQty").value=qtyOf(it); $("meCond").value=it.condition;
   $("meDate").value=it.acquisition.date||todayStr(); $("meLoc").value=it.location||""; $("meAsking").value=it.listing?.askingPrice??""; $("meStatus").value=it.status;
   $("meGradeCo").value=it.grading?.company||""; $("meGrade").value=it.grading?.grade??""; $("meGradeVal").value=it.grading?.gradedValue??"";
-  mountPhoto(it.userPhoto);
+  mountPhoto(it.userPhoto); mountPhoto2(it.userPhoto2);
+  $("meManualRef").value = it.manualRef>0 ? it.manualRef : "";
+  $("meRefHint").textContent = it.market?.ref ? `Prix automatique : ${fmt(it.market.ref)}` : "Aucun prix automatique pour cet article : indique le prix constaté.";
+  renderLog(it);
   setPlace("meListPlatform","meListCustom","meListCustomWrap", it.listing?.platform);
   $("meSoldPrice").value=it.sale?.soldPrice??""; setPlace("meSoldPlatform","meSoldCustom","meSoldCustomWrap", it.sale?.platform||it.listing?.platform);
   $("meFee").value=it.sale?.fees?.platformFee??""; $("meShip").value=it.sale?.fees?.shipping??"";
@@ -932,6 +1036,15 @@ $("meSoldPlatform").addEventListener("change",e=>{$("meSoldCustomWrap").hidden=e
 let editPhoto=null;
 function mountPhoto(src){ editPhoto=src||null; const pv=$("mePhotoPv"); if(src){pv.src=src;pv.style.display="";}else{pv.removeAttribute("src");pv.style.display="none";} }
 $("mePhotoClear").addEventListener("click",()=>mountPhoto(null));
+let editPhoto2=null;
+function mountPhoto2(src){ editPhoto2=src||null; const pv=$("mePhoto2Pv"); if(src){pv.src=src;pv.style.display="";}else{pv.removeAttribute("src");pv.style.display="none";} }
+$("mePhoto2Clear").addEventListener("click",()=>mountPhoto2(null));
+$("mePhoto2").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;downscale(f,500,(url)=>mountPhoto2(url));e.target.value="";});
+function renderLog(it){
+  const d=(s)=>new Date(s).toLocaleDateString("fr-FR");
+  let log=Array.isArray(it.log)&&it.log.length ? it.log : [{at:(it.acquisition?.date||"")+"T12:00:00", text:`Acheté ×${qtyOf(it)} à ${fmt(it.acquisition?.purchasePrice)}`}];
+  $("meLog").innerHTML=[...log].reverse().map(e=>`<li><span>${esc(d(e.at))}</span>${esc(e.text)}</li>`).join("");
+}
 $("mePhoto").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;downscale(f,500,(url)=>mountPhoto(url));e.target.value="";});
 function downscale(file,max,cb){const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{
   let w=im.width,h=im.height; if(w>h&&w>max){h=h*max/w;w=max;}else if(h>max){w=w*max/h;h=max;}
@@ -939,12 +1052,18 @@ function downscale(file,max,cb){const r=new FileReader();r.onload=()=>{const im=
   cb(cv.toDataURL("image/jpeg",0.82));};im.src=r.result;};r.readAsDataURL(file);}
 $("meConfirm").addEventListener("click",()=>{const it=state.items.find(i=>i.id===pendingId);if(!it)return;
   const ns=$("meStatus").value;
+  const before={pa:it.acquisition.purchasePrice, ask:it.listing?.askingPrice||0, q:qtyOf(it), st:it.status, mr:it.manualRef||0};
   it.acquisition.purchasePrice=parseFloat($("mePurchase").value)||0;
   it.quantity=Math.max(1,parseInt($("meQty").value)||1);
   it.condition=$("meCond").value; it.acquisition.date=$("meDate").value||todayStr();
   it.location=$("meLoc").value.trim()||null;
   it.listing=it.listing||{currency}; it.listing.askingPrice=parseFloat($("meAsking").value)||0;
-  it.userPhoto=editPhoto;
+  it.userPhoto=editPhoto; it.userPhoto2=editPhoto2;
+  const mr=round2(parseFloat($("meManualRef").value)||0);
+  if(mr!==before.mr){ it.manualRef=mr>0?mr:null; it.manualRefDate=mr>0?todayStr():null;
+    if(mr>0){ it.priceHistory=it.priceHistory||[]; const h=it.priceHistory.find(x=>x.date===todayStr());
+      if(h){ h.ref=mr; h.manual=true; } else it.priceHistory.push({date:todayStr(),ref:mr,manual:true}); }
+    logEvent(it, mr>0 ? `Prix marché perso : ${fmt(mr)}` : "Prix marché perso retiré (retour au prix automatique)"); }
   it.tags=parseTags($("meTags").value); it.notes=$("meNotes").value.trim()||null;
   if(it.type==="card"){ const nv=$("meVariant").value||null;
     if(nv!==(it.variant||null)){ it.variant=nv; refreshItemMarket(it); } }
@@ -954,7 +1073,23 @@ $("meConfirm").addEventListener("click",()=>{const it=state.items.find(i=>i.id==
   else if(ns==="sold"){const sp=parseFloat($("meSoldPrice").value);if(!(sp>=0)){toast("Renseigne le prix réel");return;}
     it.sale={soldPrice:sp,currency,date:it.sale?.date||todayStr(),platform:readPlatform("meSoldPlatform","meSoldCustom"),
       fees:{platformFee:parseFloat($("meFee").value)||0,shipping:parseFloat($("meShip").value)||0}};}
+  const ST={stock:"Stock",listed:"En vente",sold:"Vendu"};
+  if(it.acquisition.purchasePrice!==before.pa) logEvent(it, `Prix d'achat : ${fmt(before.pa)} → ${fmt(it.acquisition.purchasePrice)}`);
+  if((it.listing.askingPrice||0)!==before.ask) logEvent(it, `Prix indiqué : ${fmt(before.ask)} → ${fmt(it.listing.askingPrice)}`);
+  if(qtyOf(it)!==before.q) logEvent(it, `Quantité : ${before.q} → ${qtyOf(it)}`);
+  if(ns!==before.st) logEvent(it, `Statut : ${ST[before.st]} → ${ST[ns]}`);
   it.status=ns; it.updatedAt=new Date().toISOString(); persist();closeModals();renderAll();toast("Modifications enregistrées");});
+// Dupliquer : copie de la ligne telle qu'enregistrée, remise en stock, puis ouverte pour ajustement
+$("meDuplicate").addEventListener("click",()=>{
+  const src=state.items.find(i=>i.id===pendingId); if(!src) return;
+  const c=JSON.parse(JSON.stringify(src));
+  Object.assign(c,{id:newId(), quantity:1, status:"stock", sale:null, userPhoto:null, userPhoto2:null, log:[],
+    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()});
+  c.listing={askingPrice:src.listing?.askingPrice||0, currency, platform:null, listedDate:null};
+  logEvent(c, `Copie de « ${src.catalog.name} »`);
+  state.items.push(c); persist(); renderAll(); closeModals();
+  pendingId=c.id; openEditModal(c.id); toast("Ligne dupliquée : ajuste-la puis enregistre");
+});
 
 /* ---------- Étiquettes ---------- */
 const TAG_SUGGEST=["à grader","réservé","à photographier","à expédier","lot"];
@@ -973,10 +1108,31 @@ $("meTagPicks").addEventListener("click",e=>{ const b=e.target.closest("[data-ta
   if(i>=0) list.splice(i,1); else list.push(t);
   $("meTags").value=list.join(", "); renderTagPicks(); });
 async function refreshItemMarket(it){          // après un changement de variante
-  const m=await fetchMarket(it.catalog.cardId, it.variant);
+  const m=await fetchMarket(it.catalog.cardId, it.variant, it.catalog.language);
   it.market=marketSnapshot(m); it.priceHistory=m?[{date:todayStr(),ref:m.ref}]:[];
   persist(); renderAll();
 }
+
+/* ---------- Baisse de prix rapide (cartes qui dorment) ---------- */
+function dropPrice(id){
+  const it=state.items.find(i=>i.id===id); if(!it || !(it.listing?.askingPrice>0)) return;
+  const old=it.listing.askingPrice, nw=round2(old*0.9);
+  it.listing.askingPrice=nw; logEvent(it, `Baisse de prix −10 % : ${fmt(old)} → ${fmt(nw)}`); persist(); renderAll();
+  toast(`Prix baissé : ${fmt(old)} → ${fmt(nw)}`,{action:"Annuler", onAction:()=>{ it.listing.askingPrice=old; it.log.pop(); persist(); renderAll(); }});
+}
+/* ---------- Visionneuse recto / verso ---------- */
+let viewerItem=null;
+function openPhotoViewer(id){
+  const it=state.items.find(i=>i.id===id); if(!it) return; viewerItem=it;
+  const both=!!(it.userPhoto && it.userPhoto2);
+  $("phTitle").textContent=it.catalog.name; $("phSwitch").hidden=!both;
+  showSide(it.userPhoto?"recto":"verso"); $("modalPhoto").classList.add("on");
+}
+function showSide(s){ if(!viewerItem) return;
+  $("phImg").src = s==="verso" ? viewerItem.userPhoto2 : viewerItem.userPhoto;
+  $("phImg").alt = `${viewerItem.catalog.name}, ${s}`;
+  document.querySelectorAll("#phSwitch [data-side]").forEach(b=>b.setAttribute("aria-pressed", b.dataset.side===s)); }
+$("phSwitch").addEventListener("click",e=>{ const b=e.target.closest("[data-side]"); if(b) showSide(b.dataset.side); });
 
 /* ---------- Corbeille (30 jours) ---------- */
 function deleteItem(id){
@@ -990,6 +1146,7 @@ function restoreItem(id){
   const i=state.trash.findIndex(t=>t.item.id===id); if(i<0) return;
   const [t]=state.trash.splice(i,1); state.items.push(t.item);
   persist(); renderAll(); if($("modalTrash").classList.contains("on")) renderTrash();
+  logEvent(t.item,"Restaurée depuis la corbeille"); persist();
   toast(`« ${t.item.catalog.name} » restaurée`);
 }
 function purgeItem(id){
@@ -1030,10 +1187,10 @@ $("btnWishAdd").addEventListener("click",()=>{
 });
 $("waConfirm").addEventListener("click",()=>{
   const target=round2(parseFloat($("waTarget").value)); if(!(target>0)){ toast("Indique un prix cible"); return; }
-  const v=$("selVariant").value||null, ex=state.wishlist.find(w=>w.cardId===selected.id && (w.variant||null)===v);
+  const v=$("selVariant").value||null, ex=state.wishlist.find(w=>w.cardId===selected.id && (w.variant||null)===v && (w.language||"fr")===(selected.language||"fr"));
   if(ex){ ex.targetPrice=target; ex.market=marketSnapshot(selMarket); }
   else state.wishlist.push({id:newId("w_"), cardId:selected.id, name:selected.name, number:selected.number, set:selected.set,
-    imageUrl:selected.imageUrl, variant:v, targetPrice:target, market:marketSnapshot(selMarket), createdAt:new Date().toISOString()});
+    imageUrl:selected.imageUrl, language:selected.language||"fr", variant:v, targetPrice:target, market:marketSnapshot(selMarket), createdAt:new Date().toISOString()});
   persist(); renderAll(); closeModals(); toast(ex?"Prix cible mis à jour":"Ajoutée à ta liste d'achats");
 });
 function renderWish(){
@@ -1055,7 +1212,7 @@ $("wishList").addEventListener("change",e=>{ const inp=e.target.closest("[data-w
 $("btnWish").addEventListener("click",()=>{ renderWish(); $("modalWish").classList.add("on"); });
 function removeWish(id){ state.wishlist=state.wishlist.filter(w=>w.id!==id); persist(); updateWishCount(); renderWish(); }
 async function refreshWishlist(){ let ok=0;
-  for(const w of state.wishlist){ const m=await fetchMarket(w.cardId,w.variant); if(m){ w.market=marketSnapshot(m); ok++; } }
+  for(const w of state.wishlist){ const m=await fetchMarket(w.cardId,w.variant,w.language,true); if(m){ w.market=marketSnapshot(m); ok++; } }
   return ok; }
 $("wishRefresh").addEventListener("click",async()=>{
   if(!state.wishlist.length) return; toast("Mise à jour des prix…");
@@ -1067,13 +1224,13 @@ async function buyFromWish(wid){
   const w=state.wishlist.find(x=>x.id===wid); if(!w) return;
   closeModals(); if(entryMode!=="card") applyMode("card");
   $("selCard").value=""; clearSelection();
-  selected={id:w.cardId,name:w.name,number:w.number,language:"fr",set:w.set,imageUrl:w.imageUrl};
+  selected={id:w.cardId,name:w.name,number:w.number,language:w.language||"fr",set:w.set,imageUrl:w.imageUrl};
   pendingWishId=w.id; selMarket=w.market||null;
   $("inPurchase").value=w.targetPrice.toFixed(2);
   renderSelectedPreview(); renderMktBox(selMarket); validateForm(); updateSuggest();
   $("preview").scrollIntoView({behavior:"smooth",block:"center"});
   toast("Vérifie le prix payé puis ajoute au stock");
-  const wid2=pendingWishId; await fillVariants(w.cardId, w.variant);
+  const wid2=pendingWishId; await fillVariants(w.cardId, w.variant, w.language||"fr");
   pendingWishId=wid2;
 }
 
@@ -1192,8 +1349,44 @@ function openAnalytics(){
   const ranked=sold.map(it=>({lbl:`${it.catalog.name} (${it.catalog.set.name})`,val:realMargin(it)})).sort((a,b)=>b.val-a.val);
   bars("topWin", ranked.slice(0,5));
   bars("topFlop", ranked.slice(-5).reverse());
+  renderYearSelect(); renderYear();
   $("modalAnalytics").classList.add("on");
 }
+/* ---------- Récapitulatif annuel ---------- */
+let anYear=String(new Date().getFullYear());
+function renderYearSelect(){
+  const ys=new Set([String(new Date().getFullYear())]);
+  state.items.forEach(i=>{ if(i.acquisition?.date) ys.add(i.acquisition.date.slice(0,4)); if(i.sale?.date) ys.add(i.sale.date.slice(0,4)); });
+  const list=[...ys].filter(y=>/^\d{4}$/.test(y)).sort().reverse(); if(!list.includes(anYear)) anYear=list[0];
+  $("anYear").innerHTML=list.map(y=>`<option value="${y}">${y}</option>`).join(""); $("anYear").value=anYear;
+}
+const salesOfYear=(y)=>state.items.filter(i=>i.status==="sold" && (i.sale?.date||"").slice(0,4)===y).sort((a,b)=>(a.sale.date||"").localeCompare(b.sale.date||""));
+function renderYear(){
+  const y=anYear, sales=salesOfYear(y);
+  const buys=state.items.filter(i=>(i.acquisition?.date||"").slice(0,4)===y).reduce((s,i)=>s+(i.acquisition.purchasePrice||0)*qtyOf(i),0);
+  let ca=0, fees=0, cost=0, margin=0, units=0;
+  sales.forEach(i=>{ const q=qtyOf(i); ca+=(i.sale.soldPrice||0)*q; fees+=itemFees(i); cost+=(i.acquisition.purchasePrice||0)*q; margin+=realMargin(i); units+=q; });
+  const cell=(l,v,col)=>`<div><span>${l}</span><b${col?` style="color:${col}"`:""}>${v}</b></div>`;
+  $("anYearStats").innerHTML = cell(`Achats ${y}`,fmt(buys)) + cell("Chiffre d'affaires",fmt(ca)) + cell("Frais (plateformes, envois)",fmt(fees))
+    + cell("Coût des cartes vendues",fmt(cost)) + cell("Marge nette",fmt(margin),margin>=0?"var(--sold)":"var(--loss)")
+    + cell("Ventes",`${sales.length} (${units} unité${units>1?"s":""})`) + cell("ROI",cost>0?pct(margin/cost*100):"—");
+  const byP={}; sales.forEach(i=>{ const p=i.sale.platform||"—"; (byP[p]=byP[p]||{sum:0,n:0}).sum+=realMargin(i); byP[p].n++; });
+  bars("anYearPlat", Object.entries(byP).map(([lbl,o])=>({lbl,val:o.sum,count:o.n})).sort((a,b)=>b.val-a.val));
+  $("anYearCsv").disabled=!sales.length;
+}
+$("anYear").addEventListener("change",e=>{ anYear=e.target.value; renderYear(); });
+$("anYearCsv").addEventListener("click",()=>{
+  const sales=salesOfYear(anYear); if(!sales.length) return;
+  const head=["Date de vente","Article","Set","Numéro","Variante","Langue","Quantité","Lieu de vente","Prix unitaire","Chiffre d'affaires","Frais plateforme","Frais d'envoi","Coût d'achat","Marge nette"];
+  let T={ca:0,fp:0,fe:0,co:0,m:0};
+  const rows=sales.map(i=>{ const q=qtyOf(i), ca=(i.sale.soldPrice||0)*q, fp=i.sale.fees?.platformFee||0, fe=i.sale.fees?.shipping||0, co=(i.acquisition.purchasePrice||0)*q, m=realMargin(i);
+    T.ca+=ca; T.fp+=fp; T.fe+=fe; T.co+=co; T.m+=m;
+    return [i.sale.date, csvText(i.catalog.name), csvText(i.catalog.set?.name), csvText(i.catalog.number), VARIANT_LABEL[i.variant]||"", (i.catalog.language||"").toUpperCase(),
+      q, csvText(i.sale.platform), csvNum(i.sale.soldPrice), csvNum(ca), csvNum(fp), csvNum(fe), csvNum(co), csvNum(m)]; });
+  rows.push(["TOTAL","","","","","","","","",csvNum(T.ca),csvNum(T.fp),csvNum(T.fe),csvNum(T.co),csvNum(T.m)]);
+  const csv="\uFEFF"+[head,...rows].map(r=>r.map(csvCell).join(";")).join("\r\n")+"\r\n";
+  downloadBlob(new Blob([csv],{type:"text/csv;charset=utf-8"}),`kadobako-registre-${anYear}.csv`).then(ok=>{ if(ok) toast(`Registre ${anYear} exporté`); });
+});
 $("btnAnalytics").addEventListener("click",openAnalytics);
 
 /* ---------- Rafraîchir le marché (stock + en vente) ---------- */
@@ -1203,7 +1396,8 @@ $("btnRefresh").addEventListener("click",async()=>{
   const btn=$("btnRefresh"); btn.disabled=true; toast("Mise à jour du marché…"); let ok=0;
   try{
     for(const it of targets){
-      const m=await fetchMarket(it.catalog.cardId, it.variant);
+      const m=await fetchMarket(it.catalog.cardId, it.variant, it.catalog.language, true);
+      if(m && it.manualRef>0){ it.market=marketSnapshot(m); ok++; continue; }      // prix perso prioritaire : on garde juste le prix auto à jour
       if(m){ it.market=marketSnapshot(m); it.priceHistory=it.priceHistory||[];
         const d=todayStr(), h=it.priceHistory.find(x=>x.date===d);
         if(h) h.ref=m.ref; else it.priceHistory.push({date:d,ref:m.ref});      // 1 relevé par jour, le plus récent
@@ -1243,17 +1437,23 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModals();});
 /* ---------- Devise / Export / Import / Vider ---------- */
 const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
 const IS_STANDALONE=(window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone===true;
+// Renvoie une promesse : vrai si le fichier a été enregistré ou partagé
 function downloadBlob(blob,name){
   if(IS_IOS && navigator.canShare){            // iOS : un téléchargement dans l'app installée ouvre une vue sans retour possible
-    try{ const f=new File([blob],name,{type:blob.type}); if(navigator.canShare({files:[f]})){ navigator.share({files:[f],title:name}).catch(()=>{}); return; } }catch(e){}
+    try{ const f=new File([blob],name,{type:blob.type});
+      if(navigator.canShare({files:[f]})) return navigator.share({files:[f],title:name}).then(()=>true,()=>false); }catch(e){}
   }
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href),4000);   // révocation différée : sinon Safari peut annuler le téléchargement
+  return Promise.resolve(true);
 }
 $("btnExport").addEventListener("click",()=>{
-  downloadBlob(new Blob([JSON.stringify(state,null,2)],{type:"application/json"}),"flipdex-"+todayStr()+".json");
-  toast("Export JSON téléchargé");
+  downloadBlob(new Blob([JSON.stringify(state,null,2)],{type:"application/json"}),"kadobako-"+todayStr()+".json").then(ok=>{
+    if(!ok) return;
+    state.settings.lastExport=new Date().toISOString(); state.settings.backupSnooze=null; persist(); renderBackup();
+    toast("Sauvegarde enregistrée — garde-la hors du téléphone (cloud, ordinateur)");
+  });
 });
 
 /* ---------- Export CSV (Excel FR : « ; », virgule décimale, BOM UTF-8) ---------- */
@@ -1275,14 +1475,14 @@ function buildCSV(){
       csvNum(pa), csvNum(pa*q), csvNum(it.listing?.askingPrice),
       csvText(sold ? it.sale?.platform : it.listing?.platform), sold ? (it.sale?.date||"") : "",
       sold ? csvNum(it.sale?.soldPrice) : "", sold ? csvNum(it.sale?.fees?.platformFee||0) : "", sold ? csvNum(it.sale?.fees?.shipping||0) : "",
-      sold ? csvNum(realMargin(it)) : "", sold ? csvNum(roiItem(it),1) : "", csvNum(it.market?.ref),
+      sold ? csvNum(realMargin(it)) : "", sold ? csvNum(roiItem(it),1) : "", csvNum(refOf(it)),
       csvText((it.tags||[]).join(", ")), csvText(it.notes) ];
   });
   return "\uFEFF"+[head,...rows].map(r=>r.map(csvCell).join(";")).join("\r\n")+"\r\n";
 }
 $("btnCSV").addEventListener("click",()=>{
   if(!state.items.length){ toast("Rien à exporter"); return; }
-  downloadBlob(new Blob([buildCSV()],{type:"text/csv;charset=utf-8"}),"flipdex-"+todayStr()+".csv");
+  downloadBlob(new Blob([buildCSV()],{type:"text/csv;charset=utf-8"}),"kadobako-"+todayStr()+".csv");
   toast("Export CSV téléchargé");
 });
 $("btnImport").addEventListener("click",()=>$("fileImport").click());
@@ -1382,10 +1582,11 @@ new MutationObserver(()=>document.documentElement.classList.toggle("modal-open",
 /* ---------- Boot ---------- */
 $("inDate").value=todayStr();
 applyTheme(null);                       // thème système en attendant le chargement
-initPickers();
 (async()=>{
   state=normalizeState(await Store.load());
   storeReady=true;
+  catalogLang = ["fr","en","ja"].includes(state.settings.catalogLang) ? state.settings.catalogLang : "fr";
+  renderLangPick(); initPickers();
   if(Store.recovered) flushSave();          // reprend les dernières modifications sauvées à la fermeture
   applyTheme(state.settings.theme);
   renderAll(); renderSession();

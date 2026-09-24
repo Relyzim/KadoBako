@@ -19,6 +19,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KadoBako">
+  <meta name="application-name" content="KadoBako">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,6 +73,7 @@
       <div class="kpi"><span class="eyebrow lab">ROI global</span><span class="val num" id="kROI">—</span><span
           class="sub">cartes vendues</span></div>
     </section>
+    <section class="backupbar" id="backupBar" role="status" hidden></section>
     <section class="goal" id="goalBar" aria-label="Bénéfice du mois"></section>
 
     <div class="grid">
@@ -101,6 +103,13 @@
         <div class="preview" id="preview"><span class="ph">La carte sélectionnée<br>s'affichera ici</span></div>
         <div class="mkt" id="mktBox" hidden></div>
 
+        <div class="field" id="langWrap"><span class="flabel">Langue des cartes</span>
+          <div class="cur" role="group" aria-label="Langue des cartes" id="langPick" style="width:100%">
+            <button type="button" data-lang="fr" aria-pressed="true" style="flex:1">FR</button>
+            <button type="button" data-lang="en" aria-pressed="false" style="flex:1">EN</button>
+            <button type="button" data-lang="ja" aria-pressed="false" style="flex:1">JP</button>
+          </div>
+        </div>
         <div class="field"><label for="selSerie">Série</label><select id="selSerie">
             <option value="">Chargement…</option>
           </select></div>
@@ -157,6 +166,9 @@
         </div>
         <div class="suggest" id="dealBox" hidden><span>Achat vs marché :</span><span class="tag" id="dealTag"></span>
         </div>
+        <div class="field"><label for="inManualRef">Prix marché constaté (optionnel)</label><input class="money"
+            id="inManualRef" type="number" min="0" step="0.01" inputmode="decimal"
+            placeholder="remplace le prix automatique"></div>
         <div class="field"><label for="inAsking">Prix de revente indiqué</label><input class="money" id="inAsking"
             type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div>
         <p class="warn" id="askWarn" hidden></p>
@@ -186,6 +198,7 @@
             <select id="sortBy" aria-label="Trier">
               <option value="recent">Récent</option>
               <option value="margin">Marge ↓</option>
+              <option value="roi">ROI ↓</option>
               <option value="asking">Prix indiqué ↓</option>
               <option value="age">Délai en stock ↓</option>
               <option value="set">Set A→Z</option>
@@ -201,7 +214,19 @@
         </div>
         <div class="cards" id="stockList"></div>
         <div class="hist" id="histWrap" hidden>
-          <div class="list-head"><span class="eyebrow">Historique des bénéfices</span></div>
+          <div class="list-head"><span class="eyebrow">Historique des bénéfices <span id="histSum"></span></span>
+            <div class="searchbar">
+              <select id="histPlatform" aria-label="Filtrer les ventes par lieu">
+                <option value="">Tous les lieux</option>
+              </select>
+              <select id="histPeriod" aria-label="Filtrer les ventes par période">
+                <option value="">Toute la période</option>
+                <option value="month">Ce mois-ci</option>
+                <option value="3m">3 derniers mois</option>
+                <option value="year">Cette année</option>
+              </select>
+            </div>
+          </div>
           <div class="cards" id="histList"></div>
         </div>
       </section>
@@ -278,6 +303,14 @@
         </div>
         <button class="mini del" id="mePhotoClear" type="button">Retirer</button>
       </div>
+      <div class="photo-drop">
+        <img id="mePhoto2Pv" class="pv" alt="">
+        <div style="flex:1"><label for="mePhoto2"
+            style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px">Photo verso</label>
+          <input id="mePhoto2" type="file" accept="image/*">
+        </div>
+        <button class="mini del" id="mePhoto2Clear" type="button">Retirer</button>
+      </div>
       <div class="row3">
         <div class="field"><label for="mePurchase">Prix d'achat</label><input class="money" id="mePurchase"
             type="number" min="0" step="0.01" inputmode="decimal"></div>
@@ -300,6 +333,10 @@
       </div>
       <div class="field"><label for="meAsking">Prix de revente indiqué</label><input class="money" id="meAsking"
           type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div class="field"><label for="meManualRef">Prix marché perso</label><input class="money" id="meManualRef"
+          type="number" min="0" step="0.01" inputmode="decimal" placeholder="vide = prix automatique">
+        <p class="fhint" id="meRefHint"></p>
+      </div>
       <div class="row3" id="meGradeRow">
         <div class="field"><label for="meGradeCo">Grading</label><select id="meGradeCo">
             <option value="">—</option>
@@ -364,7 +401,13 @@
           <option value="listed">En vente</option>
           <option value="sold">Vendu</option>
         </select></div>
-      <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm"
+      <details class="histlog">
+        <summary>Historique de la ligne</summary>
+        <ol id="meLog"></ol>
+      </details>
+      <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="cancel"
+          id="meDuplicate" type="button"
+          title="Crée une copie de la ligne telle qu'enregistrée">Dupliquer</button><button class="confirm"
           id="meConfirm" type="button">Enregistrer</button></div>
     </div>
   </div>
@@ -436,6 +479,13 @@
           <div class="bars" id="topFlop"></div>
         </div>
       </div>
+      <div class="sec-title">Récapitulatif annuel</div>
+      <div class="yearbar"><select id="anYear" aria-label="Année"></select><button class="mini" id="anYearCsv"
+          type="button">Registre des ventes (CSV)</button></div>
+      <div class="treso" id="anYearStats"></div>
+      <div class="sec-title" style="font-size:13.5px">Marge par lieu de vente</div>
+      <div class="bars" id="anYearPlat"></div>
+      <p class="fhint">Registre indicatif pour ta comptabilité ; il ne remplace pas un avis comptable.</p>
       <div class="modal-acts"><button class="confirm" data-close type="button">Fermer</button></div>
     </div>
   </div>
@@ -521,6 +571,19 @@
           id="waTarget" type="number" min="0" step="0.01" inputmode="decimal"></div>
       <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm"
           id="waConfirm" type="button">Ajouter à la liste</button></div>
+    </div>
+  </div>
+
+  <!-- Modal: photos recto / verso -->
+  <div class="scrim" id="modalPhoto">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="phTitle">
+      <h3 id="phTitle"></h3>
+      <div class="cur" role="group" aria-label="Face" id="phSwitch" style="margin:6px 0 12px">
+        <button type="button" data-side="recto" aria-pressed="true">Recto</button><button type="button"
+          data-side="verso" aria-pressed="false">Verso</button>
+      </div>
+      <img id="phImg" class="photo-big" alt="">
+      <div class="modal-acts"><button class="confirm" data-close type="button">Fermer</button></div>
     </div>
   </div>
 
