@@ -2006,6 +2006,114 @@ button.thumb:focus-visible {
   flex-wrap: wrap
 }
 
+/* ---------- v1.07 ---------- */
+.pickrow {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px
+}
+
+.pickrow input {
+  font-family: var(--f-mono);
+  text-align: center
+}
+
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer
+}
+
+.checkline input {
+  width: auto;
+  min-height: 0
+}
+
+.camwrap {
+  position: relative;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border-radius: var(--r-sm)
+}
+
+/* l'assombrissement reste dans la vidéo */
+.camwrap #camView {
+  margin-bottom: 0;
+  display: block
+}
+
+.camguide {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 80%;
+  aspect-ratio: 63/88;
+  max-width: 90%;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, .9);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(10, 4, 16, .38);
+  pointer-events: none
+}
+
+.cands {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px
+}
+
+.cands:empty {
+  display: none
+}
+
+.cand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  text-align: left;
+  font: inherit;
+  color: inherit
+}
+
+.cand:hover,
+.cand:focus-visible {
+  border-color: var(--pink)
+}
+
+.cand img {
+  width: 100%;
+  aspect-ratio: 63/88;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--surface-3)
+}
+
+.cand b {
+  font-size: 12.5px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap
+}
+
+.cand span {
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  color: var(--muted)
+}
+
+.modal:focus {
+  outline: none
+}
+
 /* Très petits écrans (iPhone SE…) : champs par deux empilés pour rester lisibles */
 @media (max-width:360px) {
   .row2 {

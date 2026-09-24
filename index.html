@@ -116,9 +116,14 @@
         <div class="field"><label for="selSet">Set / Extension</label><select id="selSet" disabled>
             <option value="">—</option>
           </select></div>
-        <div class="field" id="cardPickWrap"><label for="selCard">Carte (n°)</label><select id="selCard" disabled>
-            <option value="">—</option>
-          </select></div>
+        <div class="field" id="cardPickWrap"><label for="selCard">Carte (n°)</label>
+          <div class="pickrow"><input id="quickNum" type="text" inputmode="numeric" autocomplete="off" placeholder="n°"
+              aria-label="Taper le numéro de la carte" disabled>
+            <select id="selCard" disabled>
+              <option value="">—</option>
+            </select>
+          </div>
+        </div>
         <div class="field" id="variantWrap"><label for="selVariant">Variante</label><select id="selVariant" disabled>
             <option value="">Non précisée</option>
             <option value="normal">Normale</option>
@@ -415,11 +420,14 @@
   <!-- Modal: scan -->
   <div class="scrim" id="modalScan">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scTitle">
-      <h3 id="scTitle">Scanner (v1.1)</h3>
-      <p class="mh">Reconnaissance par empreinte visuelle (hash perceptuel) parmi les cartes du set sélectionné, et
-        lecture de code-barres si présent. Sélectionne d'abord une série + un set.</p>
-      <video id="camView" playsinline muted></video>
-      <p class="mh" id="scNote"></p>
+      <h3 id="scTitle">Scanner une carte</h3>
+      <p class="mh">Place la carte dans le cadre, bien à plat et sans reflet, puis appuie sur « Reconnaître ». La
+        recherche se fait parmi les cartes du set choisi.</p>
+      <div class="camwrap"><video id="camView" playsinline muted></video>
+        <div class="camguide" aria-hidden="true"></div>
+      </div>
+      <p class="mh" id="scNote" role="status"></p>
+      <div class="cands" id="scCands"></div>
       <div class="modal-acts">
         <button class="cancel" data-close type="button">Fermer</button>
         <button class="confirm" id="scCapture" type="button">Reconnaître</button>
@@ -523,7 +531,11 @@
       </div>
       <div class="sec-title">Prix TCGplayer</div>
       <div class="field"><label for="stFx">Conversion : 1 dollar = ? € (TCGplayer publie ses prix en
-          dollars)</label><input class="money" id="stFx" type="number" min="0" step="0.01"></div>
+          dollars)</label><input class="money" id="stFx" type="number" min="0" step="0.0001">
+        <label class="checkline"><input type="checkbox" id="stFxAuto"> Mise à jour automatique (taux officiel de la BCE,
+          une fois par jour)</label>
+        <p class="fhint" id="stFxInfo"></p>
+      </div>
       <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm"
           id="stConfirm" type="button">Enregistrer</button></div>
     </div>
@@ -571,6 +583,18 @@
           id="waTarget" type="number" min="0" step="0.01" inputmode="decimal"></div>
       <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm"
           id="waConfirm" type="button">Ajouter à la liste</button></div>
+    </div>
+  </div>
+
+  <!-- Modal: confirmation d'import -->
+  <div class="scrim" id="modalImport">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="imTitle">
+      <h3 id="imTitle">Importer une sauvegarde</h3>
+      <p class="mh" id="imSub"></p>
+      <div class="calc" id="imCalc"></div>
+      <p class="fhint" id="imWarn"></p>
+      <div class="modal-acts"><button class="cancel" data-close type="button">Annuler</button><button class="confirm"
+          id="imConfirm" type="button">Remplacer mes données</button></div>
     </div>
   </div>
 

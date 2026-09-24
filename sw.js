@@ -1,7 +1,8 @@
 /* KadoBako — service worker
+   (préfixe de cache « flipdex- » conservé : le changer laisserait d'anciens caches orphelins)
    Incrémenter APP_VERSION à chaque modification visible de l'app :
    c'est ce qui déclenche la mise à jour chez les utilisateurs. */
-const APP_VERSION = "v1.05";
+const APP_VERSION = "v1.1";
 const SHELL_CACHE = `flipdex-shell-${APP_VERSION}`;
 const RUNTIME_CACHE = "flipdex-runtime";
 const RUNTIME_MAX = 400;
