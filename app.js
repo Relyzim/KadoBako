@@ -318,10 +318,17 @@ async function loadCards(setId) {
   }
   cache.cards[k] = cards; return cards;
 }
+const detailErr = {};                                        // dernière erreur par carte : "net" ou "notfound"
 async function loadCardDetail(id, lang, fresh) {
   const L = lang || catalogLang, k = L + ":" + id; if (!fresh && (k in cache.detail)) return cache.detail[k];
-  if (usingFallback && L === "fr") return null;
-  try { const d = await jget(tcg(L) + "/cards/" + id); cache.detail[k] = d; return d; } catch (e) { return null; }
+  // Mode démo (catalogue injoignable au démarrage) : ne bloque plus une actualisation demandée, qui retente le réseau
+  if (usingFallback && L === "fr" && !fresh) return null;
+  try {
+    const d = await jget(tcg(L) + "/cards/" + id); cache.detail[k] = d; delete detailErr[k];
+    if (usingFallback && L === "fr") { usingFallback = false; }       // le réseau est revenu : on quitte le mode démo
+    return d;
+  }
+  catch (e) { detailErr[k] = String(e && e.message) === "404" ? "notfound" : "net"; return null; }
 }   // échec non mémorisé : réessayé plus tard
 
 /* ---------- Prix marché (réel via TCGdex pricing) ---------- */
@@ -380,6 +387,13 @@ function dealCheck(purchase, ref) {
   if (r <= 0.70) return { cls: "under", lbl: "Bon plan" };
   if (r <= 1.00) return { cls: "at", lbl: "Correct" };
   return { cls: "over", lbl: "Au-dessus du marché" };
+}
+// Résultat détaillé d'une actualisation : {m, status} avec status = ok | nodata | notfound | net
+async function fetchMarketStatus(cardId, variant, lang) {
+  const L = lang || catalogLang, d = await loadCardDetail(cardId, L, true);
+  if (!d) return { m: null, status: detailErr[L + ":" + cardId] || "net" };
+  const m = extractMarket(d.pricing, variant || undefined);
+  return { m, status: m ? "ok" : "nodata" };                   // carte trouvée mais non cotée (variante, langue ou carte trop récente)
 }
 // fresh = vraie requête réseau (actualisation) ; sinon les données déjà chargées dans la session suffisent
 async function fetchMarket(cardId, variant, lang, fresh) { const d = await loadCardDetail(cardId, lang, fresh); return extractMarket(d && d.pricing, variant || undefined); }
@@ -1132,7 +1146,9 @@ function openEditModal(id) {
   $("meGradeCo").value = it.grading?.company || ""; $("meGrade").value = it.grading?.grade ?? ""; $("meGradeVal").value = it.grading?.gradedValue ?? "";
   mountPhoto(it.userPhoto); mountPhoto2(it.userPhoto2);
   $("meManualRef").value = it.manualRef > 0 ? it.manualRef : "";
-  $("meRefHint").textContent = it.market?.ref ? `Prix automatique : ${fmt(it.market.ref)}` : "Aucun prix automatique pour cet article : indique le prix constaté.";
+  const why = { nodata: "TCGdex ne cote pas cette carte (variante, langue ou sortie trop récente)", notfound: "carte introuvable dans le catalogue TCGdex", net: "dernière actualisation en échec de connexion" }[it.marketStatus];
+  $("meRefHint").textContent = it.market?.ref ? `Prix automatique : ${fmt(it.market.ref)}` + (why ? ` (non actualisé : ${why})` : "")
+    : (it.type === "sealed" ? "Pas de prix automatique pour les scellés : indique le prix constaté." : `Aucun prix automatique${why ? ` : ${why}` : ""}. Indique le prix constaté.`);
   renderLog(it);
   setPlace("meListPlatform", "meListCustom", "meListCustomWrap", it.listing?.platform);
   $("meSoldPrice").value = it.sale?.soldPrice ?? ""; setPlace("meSoldPlatform", "meSoldCustom", "meSoldCustomWrap", it.sale?.platform || it.listing?.platform);
@@ -1596,11 +1612,12 @@ $("btnAnalytics").addEventListener("click", openAnalytics);
 $("btnRefresh").addEventListener("click", async () => {
   const targets = state.items.filter(i => i.status !== "sold" && i.type !== "sealed" && i.catalog.cardId);
   if (!targets.length && !state.wishlist.length) { toast("Aucune carte à mettre à jour (les scellés n'ont pas de prix en ligne)"); return; }
-  const btn = $("btnRefresh"); btn.disabled = true; toast("Mise à jour du marché…"); let ok = 0;
+  const btn = $("btnRefresh"); btn.disabled = true; toast("Mise à jour du marché…"); let ok = 0; const cnt = { nodata: 0, notfound: 0, net: 0 };
   try {
     await updateFx();                          // taux du jour avant de convertir les prix TCGplayer
     for (const it of targets) {
-      const m = await fetchMarket(it.catalog.cardId, it.variant, it.catalog.language, true);
+      const { m, status } = await fetchMarketStatus(it.catalog.cardId, it.variant, it.catalog.language);
+      it.marketStatus = status === "ok" ? null : status; if (status !== "ok") cnt[status]++;
       if (m && it.manualRef > 0) { it.market = marketSnapshot(m); ok++; continue; }      // prix perso prioritaire : on garde juste le prix auto à jour
       if (m) {
         it.market = marketSnapshot(m); it.priceHistory = it.priceHistory || [];
@@ -1613,8 +1630,16 @@ $("btnRefresh").addEventListener("click", async () => {
     const okW = await refreshWishlist();
     persist(); renderAll();
     const hits = state.wishlist.filter(wishHit).length;
-    if (!ok && !okW) toast("Marché indisponible (hors-ligne ?)");
-    else toast(`Marché mis à jour (${ok}/${targets.length} cartes)` + (hits ? ` · ${hits} carte(s) de ta liste au prix de ta cible` : ""));
+    const n = targets.length, parts = [];
+    if (cnt.nodata) parts.push(`${cnt.nodata} non cotée${cnt.nodata > 1 ? "s" : ""} chez TCGdex`);
+    if (cnt.notfound) parts.push(`${cnt.notfound} introuvable${cnt.notfound > 1 ? "s" : ""} dans le catalogue`);
+    if (cnt.net) parts.push(`${cnt.net} en échec de connexion`);
+    let msg;
+    if (n && cnt.net === n) msg = "TCGdex ne répond pas : vérifie ta connexion puis réessaie";
+    else if (n && !ok && !cnt.net) msg = `Aucun prix disponible chez TCGdex pour ces ${n} carte${n > 1 ? "s" : ""} : indique un prix perso dans leur fiche`;
+    else msg = `Marché : ${ok}/${n} carte${n > 1 ? "s" : ""} à jour` + (parts.length ? ` · ${parts.join(" · ")}` : "");
+    if (hits) msg += ` · ${hits} carte(s) de ta liste au prix de ta cible`;
+    toast(msg, { ms: 6000 });
   } finally { btn.disabled = false; }
 });
 
@@ -1645,13 +1670,15 @@ $("stFxAuto").addEventListener("change", async () => {
 
 /* ---------- Réglages ---------- */
 function openSettings() {
-  const s = state.settings; $("stGoal").value = s.monthlyGoal || 0; $("stFxAuto").checked = s.fxAuto !== false;
+  const s = state.settings;
+  appVersion().then(v => { $("stVersion").textContent = `Version installée : ${v}`; }); $("stGoal").value = s.monthlyGoal || 0; $("stFxAuto").checked = s.fxAuto !== false;
   $("stCoef").value = s.targetCoef; $("stUndercut").value = s.undercutPct;
   $("stVpct").value = s.fees.Vinted.pct; $("stEpct").value = s.fees.eBay.pct; $("stCpct").value = s.fees.Cardmarket.pct;
   $("stVflat").value = s.fees.Vinted.flat; $("stEflat").value = s.fees.eBay.flat; $("stCflat").value = s.fees.Cardmarket.flat;
   $("stFx").value = s.usdToEur; renderFxInfo(); $("modalSettings").classList.add("on");
 }
 $("btnSettings").addEventListener("click", openSettings);
+$("stCheckUpdate").addEventListener("click", () => checkForUpdate(true));
 $("stConfirm").addEventListener("click", () => {
   const s = state.settings;
   s.monthlyGoal = Math.max(0, parseFloat($("stGoal").value) || 0);
@@ -1845,17 +1872,48 @@ $("btnTheme").addEventListener("click", () => {
 });
 
 /* ---------- PWA : service worker, mise à jour, installation ---------- */
+let swReg = null;
+function offerUpdate(w) { if (!w || !navigator.serviceWorker.controller) return; $("updateBar").hidden = false; $("btnUpdate").onclick = () => w.postMessage({ type: "SKIP_WAITING" }); }
+function trackWorker(w) {
+  if (!w) return;
+  if (w.state === "installed") offerUpdate(w);
+  else w.addEventListener("statechange", () => { if (w.state === "installed") offerUpdate(w); });
+}
+// Vérification (automatique, ou demandée depuis les Réglages)
+async function checkForUpdate(manual) {
+  if (!swReg) { if (manual) toast("Mises à jour indisponibles ici (ouvre l'app depuis son adresse web)"); return; }
+  try { await swReg.update(); } catch (e) { if (manual) toast("Vérification impossible : es-tu connecté ?"); return; }
+  trackWorker(swReg.waiting); trackWorker(swReg.installing);
+  if (manual) {
+    if (swReg.waiting || swReg.installing) toast("Nouvelle version trouvée : elle se télécharge…");
+    else toast(`Tu as déjà la dernière version (${await appVersion()})`);
+  }
+}
+// Version en service : demandée au service worker, sinon déduite du nom de son cache
+async function appVersion() {
+  const c = navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (c) {
+    try {
+      const v = await new Promise((res, rej) => {
+        const ch = new MessageChannel(), t = setTimeout(() => rej(), 1500);
+        ch.port1.onmessage = e => { clearTimeout(t); res(e.data); }; c.postMessage({ type: "GET_VERSION" }, [ch.port2]);
+      }); if (v) return v;
+    } catch (e) { }
+  }
+  try { const k = (await caches.keys()).filter(x => x.startsWith("flipdex-shell-")).sort(); if (k.length) return k[k.length - 1].replace("flipdex-shell-", ""); } catch (e) { }
+  return "inconnue";
+}
 if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
   const hadController = !!navigator.serviceWorker.controller;
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
-      const offer = (w) => { if (!w) return; $("updateBar").hidden = false; $("btnUpdate").onclick = () => w.postMessage({ type: "SKIP_WAITING" }); };
-      if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
-      reg.addEventListener("updatefound", () => {
-        const nw = reg.installing; if (!nw) return;
-        nw.addEventListener("statechange", () => { if (nw.state === "installed" && navigator.serviceWorker.controller) offer(nw); });
-      });
-      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => { }); });
+      swReg = reg;
+      // Une version peut déjà être en attente, ou en cours de téléchargement (l'iPhone la cherche dès l'ouverture,
+      // avant même que ce code s'exécute) : on suit les deux cas, en plus des nouvelles détections
+      trackWorker(reg.waiting); trackWorker(reg.installing);
+      reg.addEventListener("updatefound", () => trackWorker(reg.installing));
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(false); });
+      setInterval(() => { if (document.visibilityState === "visible") checkForUpdate(false); }, 30 * 60000);   // app laissée ouverte longtemps
     }).catch(err => console.warn("Service worker non enregistré :", err));
   });
   let reloading = false;

@@ -2,7 +2,7 @@
    (préfixe de cache « flipdex- » conservé : le changer laisserait d'anciens caches orphelins)
    Incrémenter APP_VERSION à chaque modification visible de l'app :
    c'est ce qui déclenche la mise à jour chez les utilisateurs. */
-const APP_VERSION = "v1.1";
+const APP_VERSION = "v1.11";
 const SHELL_CACHE = `flipdex-shell-${APP_VERSION}`;
 const RUNTIME_CACHE = "flipdex-runtime";
 const RUNTIME_MAX = 400;
@@ -15,11 +15,18 @@ const SHELL_ASSETS = [
   "./apple-touch-icon.png", "./favicon.ico"
 ];
 
+// Fichiers indispensables : s'il en manque un, la mise à jour est abandonnée (l'app resterait cassée).
+// Les autres (icônes) sont facultatifs : un fichier absent ne doit jamais bloquer une mise à jour.
+const ESSENTIAL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.json"];
+
 self.addEventListener("install", (event) => {
   // cache:"reload" contourne le cache HTTP pour garantir des fichiers à jour
-  event.waitUntil(
-    caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL_ASSETS.map((u) => new Request(u, { cache: "reload" }))))
-  );
+  event.waitUntil((async () => {
+    const c = await caches.open(SHELL_CACHE);
+    await c.addAll(ESSENTIAL.map((u) => new Request(u, { cache: "reload" })));
+    await Promise.all(SHELL_ASSETS.filter((u) => !ESSENTIAL.includes(u)).map((u) =>
+      c.add(new Request(u, { cache: "reload" })).catch(() => {})));
+  })());
 });
 
 self.addEventListener("activate", (event) => {
@@ -32,6 +39,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
+  if (event.data && event.data.type === "GET_VERSION" && event.ports[0]) event.ports[0].postMessage(APP_VERSION);
 });
 
 async function trimRuntime() {
